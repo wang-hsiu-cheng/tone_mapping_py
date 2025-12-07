@@ -26,7 +26,7 @@ def read_hdr_image(file_path):
     print(f"檔案讀取成功。影像解析度: {hdr_rgb_linear.shape[1]}x{hdr_rgb_linear.shape[0]}")
     return hdr_rgb_linear
 
-def local_tone_mapping_opencv(hdr_image_linear, d, sigma_s, sigma_r, contrast, epsilon, output_gamma):
+def local_tone_mapping_opencv(hdr_image_linear, d, sigma_s, sigma_r, contrast, epsilon):
     """
     執行基於 OpenCV 雙邊濾波器的局部色調映射 (LTM) 流程。
     
@@ -96,9 +96,9 @@ def save_ldr_file(image_data, output_path):
 # --- 主程式區塊：請修改此處的檔案路徑 ---
 if __name__ == '__main__':
     # 範例輸入 HDR 檔案路徑
-    HDR_FILE_PATH = "img/little_paris_eiffel_tower_4k.hdr" 
+    HDR_FILE_PATH = "img/Desk.hdr" 
     # 輸出 LDR 檔案路徑 (請確保副檔名為 .jpg, .png 或 .tif)
-    LDR_OUTPUT_PATH = "img/little_paris_eiffel_tower_4k.png" 
+    LDR_OUTPUT_PATH = "img/Desk.png" 
     # # 範例輸入 HDR 檔案路徑
     # HDR_FILE_PATH = "img/hay_bales_4k.hdr" 
     # # 輸出 LDR 檔案路徑 (請確保副檔名為 .jpg, .png 或 .tif)
@@ -117,8 +117,7 @@ if __name__ == '__main__':
             SIGMA_S, 
             SIGMA_R, 
             CONTRAST, 
-            EPSILON,
-            OUTPUT_GAMMA
+            EPSILON
         )
         
         # 3. 儲存檔案
