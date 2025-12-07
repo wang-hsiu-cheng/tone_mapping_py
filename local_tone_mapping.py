@@ -21,7 +21,7 @@ def fixed_to_float(fixed_value, fract_bits):
 
 # MAX_FIXED_INTEGER_VALUE = (1 << (10 + 2)) - 1 # 4095
 scale_factor = 1 << Q_IN_FRACT_BITS
-N_BITS = 20
+N_BITS = 16
 MAX_FIXED_VALUE = (1 << (N_BITS - 1)) - 1
 MIN_FIXED_VALUE = -(1 << (N_BITS - 1))
 
@@ -132,8 +132,8 @@ def read_hdr_image(file_path):
     
     # --- 影像裁剪 ---
     
-    TARGET_HEIGHT = 480  # 目標高度 (H)
-    TARGET_WIDTH = 640   # 目標寬度 (W)
+    TARGET_HEIGHT = 400  # 目標高度 (H)
+    TARGET_WIDTH = 800   # 目標寬度 (W)
     
     # 檢查原始影像是否足夠大
     original_height = hdr_rgb_linear.shape[0]
@@ -148,7 +148,7 @@ def read_hdr_image(file_path):
     # 從左上角 (0, 0) 開始裁剪
     hdr_rgb_cropped = hdr_rgb_linear[
         0:TARGET_HEIGHT, 
-        0:TARGET_WIDTH, 
+        540:TARGET_WIDTH, 
         :
     ]
     
@@ -189,7 +189,7 @@ def custom_bilateral_filter_with_lut(I, d, sigma_s, sigma_r, lut_array):
             # 空間核輸入 (除法結果需要鉗位)
             # exp_input = enforce_q_precision(dist_sq / sigma_s_sq_2, Q_FRACT)
             # spatial_kernel_fixed[i + r, j + r] = fixed_point_exp_lookup(exp_input, lut_array, max_lut_index)
-            spatial_kernel_float[i + r, j + r] = enforce_q_precision(np.exp(dist_sq * SIGMA_S_2), 6)
+            spatial_kernel_float[i + r, j + r] = enforce_q_precision(np.exp(-dist_sq * SIGMA_S_2), 8)
     
     # spatial_kernel_float = fixed_to_float(spatial_kernel_fixed, Q_OUT_FRACT_BITS)
 
@@ -220,7 +220,7 @@ def custom_bilateral_filter_with_lut(I, d, sigma_s, sigma_r, lut_array):
                         diff_sq = enforce_q_precision((I_p - I_q)**2, Q_FRACT)
                         
                         # 範圍核輸入 (除法結果需要鉗位)
-                        range_exp_input = enforce_q_precision(diff_sq * SIGMA_R_2, Q_FRACT)
+                        range_exp_input = enforce_q_precision(-diff_sq * SIGMA_R_2, Q_FRACT)
 
                         range_weight_float = enforce_q_precision(np.exp(range_exp_input), 6)
                         
@@ -295,19 +295,19 @@ def local_tone_mapping_lut(hdr_image_linear, d, sigma_s, sigma_r, contrast, epsi
 
 # --- 參數設定 ---
 FILTER_D = 5        # 濾波器直徑 (d)
-SIGMA_R = 2.1       # 範圍標準差 (sigmaColor/sigmaRange): 邊緣敏感度閾值
+SIGMA_R = 1.0       # 範圍標準差 (sigmaColor/sigmaRange): 邊緣敏感度閾值
 SIGMA_S = 2.0       # 空間標準差 (sigmaSpace): 模糊半徑
 SIGMA_R_2 = enforce_q_precision(1 / 2 * SIGMA_R**2, 6)
 SIGMA_S_2 = enforce_q_precision(1 / 2 * SIGMA_S**2, 6)
-CONTRAST = 10.0    # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
+CONTRAST = 100.0    # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
 EPSILON = 1e-6      # 防止 log(0) 錯誤
-OUTPUT_GAMMA = 2.2  # 輸出 LDR 檔案所使用的 Gamma 值
+OUTPUT_GAMMA = 1  # 輸出 LDR 檔案所使用的 Gamma 值
 
 if __name__ == '__main__':
     # 💡 請將這裡的路徑替換為您的實際檔案路徑 💡
     LUT_EXCEL_PATH = "LUT/LUT.xlsx" 
-    HDR_FILE_PATH = "img/Ocean.hdr" 
-    LDR_OUTPUT_PATH = "img/Ocean.png" 
+    HDR_FILE_PATH = "img/Desk.hdr" 
+    LDR_OUTPUT_PATH = "img/Desk.png" 
     
     # 預載入和處理 LUT
     lut_array_fixed = load_and_prepare_lut(LUT_EXCEL_PATH)
