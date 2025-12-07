@@ -222,7 +222,7 @@ def custom_bilateral_filter_with_lut(I, d, sigma_s, sigma_r, lut_array):
                         # 範圍核輸入 (除法結果需要鉗位)
                         range_exp_input = enforce_q_precision(diff_sq * SIGMA_R_2, Q_FRACT)
 
-                        range_weight_float = enforce_q_precision(np.exp(range_exp_input), 8)
+                        range_weight_float = enforce_q_precision(np.exp(range_exp_input), 12)
                         
                         # --- 總權重計算 ---
                         spatial_weight_float = spatial_kernel_float[m + r, n + r]
