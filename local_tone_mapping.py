@@ -189,7 +189,7 @@ def custom_bilateral_filter_with_lut(I, d, sigma_s, sigma_r, lut_array):
             # 空間核輸入 (除法結果需要鉗位)
             # exp_input = enforce_q_precision(dist_sq / sigma_s_sq_2, Q_FRACT)
             # spatial_kernel_fixed[i + r, j + r] = fixed_point_exp_lookup(exp_input, lut_array, max_lut_index)
-            spatial_kernel_float[i + r, j + r] = enforce_q_precision(np.exp(-dist_sq * SIGMA_S_2), 8)
+            spatial_kernel_float[i + r, j + r] = enforce_q_precision(np.exp(-dist_sq * SIGMA_S_2), 16)
     
     # spatial_kernel_float = fixed_to_float(spatial_kernel_fixed, Q_OUT_FRACT_BITS)
 
@@ -222,7 +222,7 @@ def custom_bilateral_filter_with_lut(I, d, sigma_s, sigma_r, lut_array):
                         # 範圍核輸入 (除法結果需要鉗位)
                         range_exp_input = enforce_q_precision(-diff_sq * SIGMA_R_2, Q_FRACT)
 
-                        range_weight_float = enforce_q_precision(np.exp(range_exp_input), 6)
+                        range_weight_float = enforce_q_precision(np.exp(range_exp_input), 16)
                         
                         # --- 總權重計算 ---
                         spatial_weight_float = spatial_kernel_float[m + r, n + r]
@@ -297,7 +297,7 @@ def local_tone_mapping_lut(hdr_image_linear, d, sigma_s, sigma_r, contrast, epsi
 FILTER_D = 5        # 濾波器直徑 (d)
 SIGMA_R = 1.0       # 範圍標準差 (sigmaColor/sigmaRange): 邊緣敏感度閾值
 SIGMA_S = 1.5       # 空間標準差 (sigmaSpace): 模糊半徑
-CONTRAST = 10.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
+CONTRAST = 100.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
 EPSILON = 1e-6      # 防止 log(0) 錯誤
 OUTPUT_GAMMA = 1  # 輸出 LDR 檔案所使用的 Gamma 值 (例如 sRGB/Rec. 709 接近 2.2)
 SIGMA_R_2 = enforce_q_precision(1 / 2 * SIGMA_R**2, 6)
