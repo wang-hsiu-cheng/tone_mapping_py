@@ -132,8 +132,8 @@ def read_hdr_image(file_path):
     
     # --- 影像裁剪 ---
     
-    TARGET_HEIGHT = 400  # 目標高度 (H)
-    TARGET_WIDTH = 800   # 目標寬度 (W)
+    TARGET_HEIGHT = 600  # 目標高度 (H)
+    TARGET_WIDTH = 600   # 目標寬度 (W)
     
     # 檢查原始影像是否足夠大
     original_height = hdr_rgb_linear.shape[0]
@@ -147,8 +147,8 @@ def read_hdr_image(file_path):
     # 使用 NumPy 切片功能：[起始行:結束行, 起始列:結束列, 所有通道]
     # 從左上角 (0, 0) 開始裁剪
     hdr_rgb_cropped = hdr_rgb_linear[
-        0:TARGET_HEIGHT, 
-        540:TARGET_WIDTH, 
+        200:TARGET_HEIGHT, 
+        100:TARGET_WIDTH, 
         :
     ]
     
@@ -283,8 +283,8 @@ def local_tone_mapping_lut(hdr_image_linear, d, sigma_s, sigma_r, contrast, epsi
     LDR_final_linear = np.stack([R_final, G_final, B_final], axis=-1)
     
     # 7. 輸出編碼與量化 (檔案儲存專用)
-    white_point = np.percentile(LDR_final_linear, 99.9) 
-    LDR_final_normalized = np.clip(LDR_final_linear / white_point, 0, 1)
+    # white_point = np.percentile(LDR_final_linear, 99.9) 
+    LDR_final_normalized = np.clip(LDR_final_linear / 1, 0, 1)
     LDR_final_gamma = LDR_final_normalized**(1/output_gamma)
     LDR_final_8bit_rgb = (LDR_final_gamma * 255).astype(np.uint8)
     LDR_final_8bit_bgr = cv2.cvtColor(LDR_final_8bit_rgb, cv2.COLOR_RGB2BGR)
@@ -296,12 +296,12 @@ def local_tone_mapping_lut(hdr_image_linear, d, sigma_s, sigma_r, contrast, epsi
 # --- 參數設定 ---
 FILTER_D = 5        # 濾波器直徑 (d)
 SIGMA_R = 1.0       # 範圍標準差 (sigmaColor/sigmaRange): 邊緣敏感度閾值
-SIGMA_S = 2.0       # 空間標準差 (sigmaSpace): 模糊半徑
+SIGMA_S = 1.5       # 空間標準差 (sigmaSpace): 模糊半徑
+CONTRAST = 10.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
+EPSILON = 1e-6      # 防止 log(0) 錯誤
+OUTPUT_GAMMA = 1  # 輸出 LDR 檔案所使用的 Gamma 值 (例如 sRGB/Rec. 709 接近 2.2)
 SIGMA_R_2 = enforce_q_precision(1 / 2 * SIGMA_R**2, 6)
 SIGMA_S_2 = enforce_q_precision(1 / 2 * SIGMA_S**2, 6)
-CONTRAST = 100.0    # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
-EPSILON = 1e-6      # 防止 log(0) 錯誤
-OUTPUT_GAMMA = 1  # 輸出 LDR 檔案所使用的 Gamma 值
 
 if __name__ == '__main__':
     # 💡 請將這裡的路徑替換為您的實際檔案路徑 💡
