@@ -12,8 +12,9 @@
 
 ## Use
 - Run Python
-- `python3 ./tone_mapping_with_cpp.py`
+   - `python3 ./tone_mapping_with_cpp.py`
 - After Luminance.txt generated
-- `./bilateral_filter`
-- Get LDR file
-| Remember to delete the .txt files before execute the next hdr-ldr convertion
+   - `./bilateral_filter`
+   - Get LDR file
+
+> Remember to delete the .txt files before execute the next hdr-ldr convertion
