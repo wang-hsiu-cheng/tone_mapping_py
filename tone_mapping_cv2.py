@@ -26,6 +26,77 @@ def read_hdr_image(file_path):
     print(f"檔案讀取成功。影像解析度: {hdr_rgb_linear.shape[1]}x{hdr_rgb_linear.shape[0]}")
     return hdr_rgb_linear
 
+def read_hdr_rgbe(path):
+    with open(path, "rb") as f:
+        while True:
+            line = f.readline().decode(errors="ignore")
+            if line.strip()=="":
+                break
+
+        line=f.readline().decode().strip().split()
+        H=int(line[1])
+        W=int(line[3])
+
+        img=np.zeros((H,W,4),dtype=np.uint8)
+
+        for y in range(H):
+            header=f.read(4)
+            if header[0]!=2 or header[1]!=2:
+                raise ValueError("Not RLE Radiance HDR")
+
+            scan = np.zeros((W,4),dtype=np.uint8)
+            for c in range(4):
+                x=0
+                while x<W:
+                    val=ord(f.read(1))
+                    if val>128:   # run
+                        cnt=val-128
+                        b=ord(f.read(1))
+                        scan[x:x+cnt,c]=b
+                        x+=cnt
+                    else:       # literal
+                        raw=f.read(val)
+                        scan[x:x+val,c]=list(raw)
+                        x+=val
+            img[y]=scan
+    return img,W,H
+
+REC709_R_INT = 54   # 近似 0.2126 * 255
+REC709_G_INT = 183  # 近似 0.7152 * 255
+REC709_B_INT = 18   # 近似 0.0722 * 255
+
+def rgbe_to_fixed_point_12bit_optimized(rgbe_matrix):
+    
+    R_m = rgbe_matrix[..., 0].astype(np.float32) # R 尾數
+    G_m = rgbe_matrix[..., 1].astype(np.float32) # G 尾數
+    B_m = rgbe_matrix[..., 2].astype(np.float32) # B 尾數
+    E = rgbe_matrix[..., 3].astype(np.uint8)     # 8-bit Exponent
+
+    # Lm_scaled = R_m*54 + G_m*183 + B_m*18
+    Lm_32bit = (REC709_R_INT * R_m) + (REC709_G_INT * G_m) + (REC709_B_INT * B_m)
+    
+    # Lm_32bit 的範圍約是 0 到 255 * (54+183+18) = 65250。
+    
+    # 4. 🌟 提取 Lm 的前 8 位 (bits 0-7) 🌟
+    # 由於 Lm 的最大值超過 65000，我們必須先將其**右移**或**正規化**才能取前 8 位。
+    # 假設 "前 8 位" 是指 Lm 的最高有效 8 位 (MSB)，模擬硬體上的截斷。
+    
+    # 首先，將 Lm_32bit 縮小到一個合理的範圍（例如 0-255）
+    # 簡單假設 Lm_32bit 的範圍是 0 - 65535 (16 bits)
+    # 為了取得 8 bits，我們將 Lm_32bit 右移 8 位 (除以 2^8 = 256)
+    
+    # Lm_fixed_8bit = floor(Lm_32bit / 256)
+    # Lm_fixed_8bit 的範圍是 0 到 65250/256 ≈ 254
+    Lm_fixed_8bit = np.floor(Lm_32bit / 256.0).astype(np.uint8)
+    
+    # 5. 🌟 提取 E 的前 4 位 🌟
+    E_4bits = (E >> 4) & 0x0F # 取 E 的高 4 位 (MSB)
+    E_packed = E_4bits.astype(np.uint16) << 8 
+    Lm_packed = Lm_fixed_8bit.astype(np.uint16)
+    final_12bit_fixed = E_packed | Lm_packed
+    
+    return final_12bit_fixed
+
 def local_tone_mapping_opencv(hdr_image_linear, d, sigma_s, sigma_r, contrast, epsilon):
     """
     執行基於 OpenCV 雙邊濾波器的局部色調映射 (LTM) 流程。
@@ -107,6 +178,9 @@ if __name__ == '__main__':
     try:
         # 1. 讀取 HDR 檔案
         hdr_input = read_hdr_image(HDR_FILE_PATH)
+        rgbe_matrix, W, H = read_hdr_rgbe(HDR_FILE_PATH)
+        fixed_point_matrix = rgbe_to_fixed_point_12bit_optimized(rgbe_matrix)
+        print(f"\n最終定點數大小: {fixed_point_matrix.shape}, Dtype: {fixed_point_matrix.dtype}")
         
         print("\n--- 開始局部色調映射 (LTM) 流程 ---")
         

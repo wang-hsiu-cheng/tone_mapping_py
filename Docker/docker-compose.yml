@@ -21,7 +21,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       # Direct Rendering Infrastructure
       - /dev:/dev
-      - ../tone_mapping:/home/user/tone_mapping
+      - ../:/home/user/tone_mapping
     
     stop_grace_period: 1s
     command: /bin/bash

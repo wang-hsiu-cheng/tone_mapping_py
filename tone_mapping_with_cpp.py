@@ -4,6 +4,46 @@ import pandas as pd
 import os
 import time
 
+def load_and_prepare_lut(excel_path, sheet_name='Log_Calculation_int'):
+    """
+    載入 Excel 檔案，構建 LUT 查找表。
+    假設 Column 0 (輸入) 和 Column 1 (輸出) 已經是量化後的整數定點數。
+    """
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, skiprows=0, nrows=4096, 
+                             usecols=[0, 1], dtype=np.int64)
+        
+        if len(df) < 4096:
+            print(f"警告: LUT 讀取行數少於預期的 4096 行，實際讀取 {len(df)} 行。")
+        
+        input_fixed_indices = df.iloc[:, 0].values
+        output_fixed_weights = df.iloc[:, 1].values 
+
+        if np.isnan(input_fixed_indices).any() or np.isnan(output_fixed_weights).any():
+              raise ValueError("LUT 數據中包含非整數或缺失值 (NaN)。")
+
+        # 檢查索引範圍是否正確 (Q2.10 上限為 4095)
+        MAX_Q2_10_INDEX = (1 << (12)) - 1
+        
+        if input_fixed_indices.min() < 0 or input_fixed_indices.max() > MAX_Q2_10_INDEX:
+            print("-" * 50)
+            print("🚨 錯誤檢查: LUT 索引超出 Q2.10 範圍。")
+            print(f"轉換後的最大索引為 {input_fixed_indices.max()}，超過上限 {MAX_Q2_10_INDEX}。")
+            raise ValueError("LUT 索引超出 Q2.10 (0-4095) 範圍，請檢查 Column 0 數值是否小於或等於 4095。")
+            
+        lut_size = 1 << (12)
+        lut_array = np.zeros(lut_size, dtype=np.int64)
+        
+        for idx, val in zip(input_fixed_indices, output_fixed_weights):
+            if 0 <= idx < lut_size:
+                lut_array[idx] = val
+            
+        print(f"LUT 載入成功，大小: {lut_size} 點。")
+        return lut_array
+        
+    except Exception as e:
+        raise RuntimeError(f"載入或處理 LUT 檔案時發生錯誤: {e}") from e
+    
 def write_matrix_to_text_file(matrix, file_path):
     """
     將二維 NumPy 矩陣寫入純文字檔案。
@@ -55,20 +95,32 @@ def read_matrix_from_text_file(file_path):
     except Exception as e:
         print(f"讀取檔案 {file_path} 失敗: {e}")
         return None
+
+def enforce_q_precision(f_value, fract_bits, n_bits):    
+    # 縮放：將小數部分移到整數部分
+    max = (1 << (n_bits - 1)) - 1
+    min = -(1 << (n_bits - 1))
+    scaled_value = f_value * fract_bits
+    fixed_value_unclipped = np.trunc(scaled_value).astype(np.int64) 
+    fixed_value_clipped = np.clip(fixed_value_unclipped, min, max)
     
+    # 3. 轉換回浮點數 (模擬硬體輸出)
+    return fixed_value_clipped / fract_bits
+
 CONTRAST = 100.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
 EPSILON = 1e-6      # 防止 log(0) 錯誤
 
-def local_tone_mapping_lut(hdr_image_linear, Luminance_FILE_PATH, Bmatrix_FILE_PATH):
+def local_tone_mapping_lut(hdr_image_linear, fixed_point_matrix, Luminance_FILE_PATH, Bmatrix_FILE_PATH, lut_array, Lm):
     """執行使用客製化雙邊濾波器 (LUT 加速) 的 LTM 流程。"""
     R_orig, G_orig, B_orig = [hdr_image_linear[..., i] for i in range(3)]
 
-    # 1. 計算亮度 (Luminance)
-    L = 0.2126 * R_orig + 0.7152 * G_orig + 0.0722 * B_orig
+    # # 1. 計算亮度 (Luminance)
+    # Lm = enforce_q_precision(0.2126 * R_orig + 0.7152 * G_orig + 0.0722 * B_orig, 10.0, 16)
 
-    # 2. 對數轉換
-    I = np.log10(L + EPSILON)
-        
+    # # 2. 對數轉換
+    # I = enforce_q_precision(np.log10(Lm + EPSILON), 8.0, 14)
+    I = log_lookup(fixed_point_matrix, lut_array) / 1024.0
+
     # 3. 儲存 I 矩陣 (對數亮度)
     write_matrix_to_text_file(I, Luminance_FILE_PATH)
     print(f"\n==================================================================")
@@ -102,7 +154,7 @@ def local_tone_mapping_lut(hdr_image_linear, Luminance_FILE_PATH, Bmatrix_FILE_P
     # 6. 重建與色彩還原 (Reconstruction)
     I_prime = B_compressed + D
     L_prime = 10**(I_prime)
-    L_safe = np.where(L > EPSILON, L, EPSILON)
+    L_safe = np.where(Lm > EPSILON, Lm, EPSILON)
     ratio = L_prime / L_safe
 
     R_final = R_orig * ratio
@@ -111,8 +163,7 @@ def local_tone_mapping_lut(hdr_image_linear, Luminance_FILE_PATH, Bmatrix_FILE_P
     LDR_final_linear = np.stack([R_final, G_final, B_final], axis=-1)
     
     # 7. 輸出編碼與量化 (檔案儲存專用)
-    # white_point = np.percentile(LDR_final_linear, 99.9) 
-    LDR_final_normalized = np.clip(LDR_final_linear / 1, 0, 1)
+    LDR_final_normalized = np.clip(LDR_final_linear, 0, 1)
     LDR_final_8bit_rgb = (LDR_final_normalized * 255).astype(np.uint8)
     LDR_final_8bit_bgr = cv2.cvtColor(LDR_final_8bit_rgb, cv2.COLOR_RGB2BGR)
 
@@ -162,6 +213,71 @@ def read_hdr_image(file_path):
     
     return hdr_rgb_cropped
 
+def read_hdr_rgbe(path):
+    with open(path, "rb") as f:
+        while True:
+            line = f.readline().decode(errors="ignore")
+            if line.strip()=="":
+                break
+
+        line=f.readline().decode().strip().split()
+        H=int(line[1])
+        W=int(line[3])
+
+        img=np.zeros((H,W,4),dtype=np.uint8)
+
+        for y in range(H):
+            header=f.read(4)
+            if header[0]!=2 or header[1]!=2:
+                raise ValueError("Not RLE Radiance HDR")
+
+            scan = np.zeros((W,4),dtype=np.uint8)
+            for c in range(4):
+                x=0
+                while x<W:
+                    val=ord(f.read(1))
+                    if val>128:   # run
+                        cnt=val-128
+                        b=ord(f.read(1))
+                        scan[x:x+cnt,c]=b
+                        x+=cnt
+                    else:       # literal
+                        raw=f.read(val)
+                        scan[x:x+val,c]=list(raw)
+                        x+=val
+            img[y]=scan
+    return img,W,H
+
+REC709_R_INT = 54   # 近似 0.2126 * 255
+REC709_G_INT = 183  # 近似 0.7152 * 255
+REC709_B_INT = 18   # 近似 0.0722 * 255
+
+def rgbe_to_fixed_point_12bit_optimized(rgbe_matrix):
+    
+    R_m = rgbe_matrix[..., 0].astype(np.uint16)
+    G_m = rgbe_matrix[..., 1].astype(np.uint16)
+    B_m = rgbe_matrix[..., 2].astype(np.uint16)
+
+    # 指數保持 8-bit 進行位元操作
+    E = rgbe_matrix[..., 3].astype(np.uint8)
+
+    # Lm_scaled = R_m*54 + G_m*183 + B_m*18
+    Lm_32bit = (REC709_R_INT * R_m) + (REC709_G_INT * G_m) + (REC709_B_INT * B_m)
+    Lm_8bit_mantissa = np.clip(np.floor(Lm_32bit / 256.0), 0, 255).astype(np.uint8)
+    E_4bits = ((E >> 4) & 0x0F).astype(np.uint16)
+    Lm_packed = Lm_8bit_mantissa.astype(np.uint16) << 4 
+    final_12bit_fixed = Lm_packed | E_4bits
+    
+    return final_12bit_fixed, Lm_8bit_mantissa
+
+def log_lookup(value, lut_array):
+    """
+    使用 LUT 執行指數運算，輸入為浮點數，輸出為定點數權重。
+    """
+    fixed_index = np.clip(value, 0, lut_array.shape[0] - 1)
+    I_matrix = lut_array[fixed_index]
+    return I_matrix
+
 def save_ldr_file(image_data, output_path):
     """使用 OpenCV 將 8-bit 影像數據儲存為 LDR 檔案。"""
     success = cv2.imwrite(output_path, image_data)
@@ -177,9 +293,15 @@ if __name__ == '__main__':
     Luminance_FILE_PATH = "data/luminance.txt"
     Bmatrix_FILE_PATH = "data/B_matrix.txt"
 
+    LUT_EXCEL_PATH = "LUT/log_calculation_int_2.xlsx" 
+
     try:
+        lut_array_fixed = load_and_prepare_lut(LUT_EXCEL_PATH)
         hdr_input = read_hdr_image(HDR_FILE_PATH)
-        final_ldr_8bit_bgr = local_tone_mapping_lut(hdr_input, Luminance_FILE_PATH, Bmatrix_FILE_PATH)
+        rgbe_matrix, W, H = read_hdr_rgbe(HDR_FILE_PATH)
+        fixed_point_matrix, Lm_packed = rgbe_to_fixed_point_12bit_optimized(rgbe_matrix)
+        print(f"\n最終定點數大小: {fixed_point_matrix.shape}, Dtype: {fixed_point_matrix.dtype}")
+        final_ldr_8bit_bgr = local_tone_mapping_lut(hdr_input, fixed_point_matrix, Luminance_FILE_PATH, Bmatrix_FILE_PATH, lut_array_fixed, Lm_packed)
         save_ldr_file(final_ldr_8bit_bgr, LDR_OUTPUT_PATH)
         
     except FileNotFoundError as e:
