@@ -105,7 +105,7 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
             
             // 計算 exp(-x) 並鉗位
             // float weight = std::exp(-exp_input); 
-            float weight = exp_lut[std::trunc(exp_input * 64)] / 1024.0;
+            float weight = exp_lut[std::trunc(exp_input * 1024)] / 1024.0;
             
             // Eigen 矩陣的元素存取: (行, 列)
             spatial_kernel_float(i + r, j + r) = enforce_q_precision(weight, 10, 11);
@@ -149,7 +149,7 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
                         float range_exp_input = enforce_q_precision(diff_sq * SIGMA_R_2, 6, 12);
                         // 查找並獲得 Qx.10 浮點數權重 (這裡直接計算 exp(-x) 並鉗位)
                         // float range_weight_float = enforce_q_precision(std::exp(-range_exp_input), 6, 7);
-                        float range_weight_float = exp_lut[std::trunc(range_exp_input * 64)] / 1024.0;
+                        float range_weight_float = exp_lut[std::trunc(range_exp_input * 1024)] / 1024.0;
                         // --- 總權重計算 ---
                         float spatial_weight_float = spatial_kernel_float(m + r, n + r); // Eigen 存取
                         // 總權重 (乘法結果需要鉗位)

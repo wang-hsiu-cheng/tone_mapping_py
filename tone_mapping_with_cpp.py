@@ -110,7 +110,7 @@ def enforce_q_precision(f_value, fract_bits, n_bits):
 FILTER_D = 5        # 濾波器直徑 (d)
 SIGMA_R = 1.0       # 範圍標準差 (sigmaColor/sigmaRange): 邊緣敏感度閾值
 SIGMA_S = 1.5       # 空間標準差 (sigmaSpace): 模糊半徑
-CONTRAST = 100.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
+CONTRAST = 10.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
 EPSILON = 1e-6      # 防止 log(0) 錯誤
 
 def local_tone_mapping_lut(fixed_point_matrix, Luminance_FILE_PATH, Bmatrix_FILE_PATH, lut_array, R, G, B, E):
