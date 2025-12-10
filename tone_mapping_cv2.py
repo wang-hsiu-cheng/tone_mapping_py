@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import pandas as pd 
 # 移除 matplotlib 導入，因為我們不再需要顯示功能
 
 # --- 參數設定 ---
@@ -10,6 +11,46 @@ SIGMA_S = 1.5       # 空間標準差 (sigmaSpace): 模糊半徑
 CONTRAST = 100.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
 EPSILON = 1e-6      # 防止 log(0) 錯誤
 
+def load_and_prepare_lut(excel_path, sheet_name='Log_Calculation_int'):
+    """
+    載入 Excel 檔案，構建 LUT 查找表。
+    假設 Column 0 (輸入) 和 Column 1 (輸出) 已經是量化後的整數定點數。
+    """
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, skiprows=0, nrows=4096, 
+                             usecols=[0, 1], dtype=np.int64)
+        
+        if len(df) < 4096:
+            print(f"警告: LUT 讀取行數少於預期的 4096 行，實際讀取 {len(df)} 行。")
+        
+        input_fixed_indices = df.iloc[:, 0].values
+        output_fixed_weights = df.iloc[:, 1].values 
+
+        if np.isnan(input_fixed_indices).any() or np.isnan(output_fixed_weights).any():
+              raise ValueError("LUT 數據中包含非整數或缺失值 (NaN)。")
+
+        # 檢查索引範圍是否正確 (Q2.10 上限為 4095)
+        MAX_Q2_10_INDEX = (1 << (12)) - 1
+        
+        if input_fixed_indices.min() < 0 or input_fixed_indices.max() > MAX_Q2_10_INDEX:
+            print("-" * 50)
+            print("🚨 錯誤檢查: LUT 索引超出 Q2.10 範圍。")
+            print(f"轉換後的最大索引為 {input_fixed_indices.max()}，超過上限 {MAX_Q2_10_INDEX}。")
+            raise ValueError("LUT 索引超出 Q2.10 (0-4095) 範圍，請檢查 Column 0 數值是否小於或等於 4095。")
+            
+        lut_size = 1 << (12)
+        lut_array = np.zeros(lut_size, dtype=np.int64)
+        
+        for idx, val in zip(input_fixed_indices, output_fixed_weights):
+            if 0 <= idx < lut_size:
+                lut_array[idx] = val
+            
+        print(f"LUT 載入成功，大小: {lut_size} 點。")
+        return lut_array
+        
+    except Exception as e:
+        raise RuntimeError(f"載入或處理 LUT 檔案時發生錯誤: {e}") from e
+    
 def read_hdr_image(file_path):
     """
     使用 OpenCV 讀取標準 HDR 檔案 (.hdr 或 .exr)。
@@ -67,37 +108,32 @@ REC709_B_INT = 18   # 近似 0.0722 * 255
 
 def rgbe_to_fixed_point_12bit_optimized(rgbe_matrix):
     
-    R_m = rgbe_matrix[..., 0].astype(np.float32) # R 尾數
-    G_m = rgbe_matrix[..., 1].astype(np.float32) # G 尾數
-    B_m = rgbe_matrix[..., 2].astype(np.float32) # B 尾數
-    E = rgbe_matrix[..., 3].astype(np.uint8)     # 8-bit Exponent
+    R_m = rgbe_matrix[..., 0].astype(np.uint16)
+    G_m = rgbe_matrix[..., 1].astype(np.uint16)
+    B_m = rgbe_matrix[..., 2].astype(np.uint16)
+
+    # 指數保持 8-bit 進行位元操作
+    E = rgbe_matrix[..., 3].astype(np.uint8)
 
     # Lm_scaled = R_m*54 + G_m*183 + B_m*18
     Lm_32bit = (REC709_R_INT * R_m) + (REC709_G_INT * G_m) + (REC709_B_INT * B_m)
+    Lm_8bit_mantissa = np.clip(np.floor(Lm_32bit / 256.0), 0, 255).astype(np.uint8)
+    E_4bits = ((E >> 4) & 0x0F).astype(np.uint16)
+    Lm_packed = Lm_8bit_mantissa.astype(np.uint16) << 4 
+    final_12bit_fixed = Lm_packed | E_4bits
+    L = (Lm_32bit / 256.0) * np.power(2.0, E_4bits-16.0)
     
-    # Lm_32bit 的範圍約是 0 到 255 * (54+183+18) = 65250。
-    
-    # 4. 🌟 提取 Lm 的前 8 位 (bits 0-7) 🌟
-    # 由於 Lm 的最大值超過 65000，我們必須先將其**右移**或**正規化**才能取前 8 位。
-    # 假設 "前 8 位" 是指 Lm 的最高有效 8 位 (MSB)，模擬硬體上的截斷。
-    
-    # 首先，將 Lm_32bit 縮小到一個合理的範圍（例如 0-255）
-    # 簡單假設 Lm_32bit 的範圍是 0 - 65535 (16 bits)
-    # 為了取得 8 bits，我們將 Lm_32bit 右移 8 位 (除以 2^8 = 256)
-    
-    # Lm_fixed_8bit = floor(Lm_32bit / 256)
-    # Lm_fixed_8bit 的範圍是 0 到 65250/256 ≈ 254
-    Lm_fixed_8bit = np.floor(Lm_32bit / 256.0).astype(np.uint8)
-    
-    # 5. 🌟 提取 E 的前 4 位 🌟
-    E_4bits = (E >> 4) & 0x0F # 取 E 的高 4 位 (MSB)
-    E_packed = E_4bits.astype(np.uint16) << 8 
-    Lm_packed = Lm_fixed_8bit.astype(np.uint16)
-    final_12bit_fixed = E_packed | Lm_packed
-    
-    return final_12bit_fixed
+    return final_12bit_fixed, L
 
-def local_tone_mapping_opencv(hdr_image_linear, d, sigma_s, sigma_r, contrast, epsilon):
+def log_lookup(value, lut_array):
+    """
+    使用 LUT 執行指數運算，輸入為浮點數，輸出為定點數權重。
+    """
+    fixed_index = np.clip(value, 0, lut_array.shape[0] - 1)
+    I_matrix = lut_array[fixed_index]
+    return I_matrix
+
+def local_tone_mapping_opencv(hdr_image_linear, fixed_point_matrix, lut_array, d, sigma_s, sigma_r, contrast, epsilon, Lm):
     """
     執行基於 OpenCV 雙邊濾波器的局部色調映射 (LTM) 流程。
     
@@ -107,10 +143,11 @@ def local_tone_mapping_opencv(hdr_image_linear, d, sigma_s, sigma_r, contrast, e
     R_orig, G_orig, B_orig = [hdr_image_linear[..., i] for i in range(3)]
 
     # --- 1. 計算亮度 (Luminance) ---
-    L = 0.2126 * R_orig + 0.7152 * G_orig + 0.0722 * B_orig
+    # L = 0.2126 * R_orig + 0.7152 * G_orig + 0.0722 * B_orig
+    I = log_lookup(fixed_point_matrix, lut_array) / 1024.0
 
     # --- 2. 對數轉換 ---
-    I = np.log10(L + epsilon)
+    # I = np.log10(L + epsilon)
 
     # --- 3. 雙邊濾波 (提取基礎層 B) ---
     I_float32 = I.astype(np.float32)
@@ -130,7 +167,7 @@ def local_tone_mapping_opencv(hdr_image_linear, d, sigma_s, sigma_r, contrast, e
     I_prime = B_compressed + D
     L_prime = 10**(I_prime)
     
-    L_safe = np.where(L > epsilon, L, epsilon)
+    L_safe = np.where(Lm > epsilon, Lm, epsilon)
     ratio = L_prime / L_safe
 
     R_final = R_orig * ratio
@@ -166,20 +203,16 @@ def save_ldr_file(image_data, output_path):
 
 # --- 主程式區塊：請修改此處的檔案路徑 ---
 if __name__ == '__main__':
-    # 範例輸入 HDR 檔案路徑
     HDR_FILE_PATH = "img/Desk.hdr" 
-    # 輸出 LDR 檔案路徑 (請確保副檔名為 .jpg, .png 或 .tif)
     LDR_OUTPUT_PATH = "img/Desk.png" 
-    # # 範例輸入 HDR 檔案路徑
-    # HDR_FILE_PATH = "img/hay_bales_4k.hdr" 
-    # # 輸出 LDR 檔案路徑 (請確保副檔名為 .jpg, .png 或 .tif)
-    # LDR_OUTPUT_PATH = "img/hay_bales_4k.png" 
+    LUT_EXCEL_PATH = "LUT/log_calculation_int_2.xlsx" 
     
     try:
         # 1. 讀取 HDR 檔案
+        lut_array_fixed = load_and_prepare_lut(LUT_EXCEL_PATH)
         hdr_input = read_hdr_image(HDR_FILE_PATH)
         rgbe_matrix, W, H = read_hdr_rgbe(HDR_FILE_PATH)
-        fixed_point_matrix = rgbe_to_fixed_point_12bit_optimized(rgbe_matrix)
+        fixed_point_matrix, Lm = rgbe_to_fixed_point_12bit_optimized(rgbe_matrix)
         print(f"\n最終定點數大小: {fixed_point_matrix.shape}, Dtype: {fixed_point_matrix.dtype}")
         
         print("\n--- 開始局部色調映射 (LTM) 流程 ---")
@@ -187,11 +220,14 @@ if __name__ == '__main__':
         # 2. 執行色調映射和最終編碼
         final_ldr_8bit_bgr = local_tone_mapping_opencv(
             hdr_input, 
+            fixed_point_matrix,
+            lut_array_fixed,
             FILTER_D, 
             SIGMA_S, 
             SIGMA_R, 
             CONTRAST, 
-            EPSILON
+            EPSILON,
+            Lm
         )
         
         # 3. 儲存檔案

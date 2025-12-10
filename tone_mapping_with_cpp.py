@@ -101,7 +101,7 @@ def enforce_q_precision(f_value, fract_bits, n_bits):
     max = (1 << (n_bits - 1)) - 1
     min = -(1 << (n_bits - 1))
     scaled_value = f_value * fract_bits
-    fixed_value_unclipped = np.trunc(scaled_value).astype(np.int64) 
+    fixed_value_unclipped = np.trunc(scaled_value).astype(np.int32) 
     fixed_value_clipped = np.clip(fixed_value_unclipped, min, max)
     
     # 3. 轉換回浮點數 (模擬硬體輸出)
@@ -110,19 +110,23 @@ def enforce_q_precision(f_value, fract_bits, n_bits):
 CONTRAST = 100.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
 EPSILON = 1e-6      # 防止 log(0) 錯誤
 
-def local_tone_mapping_lut(hdr_image_linear, fixed_point_matrix, Luminance_FILE_PATH, Bmatrix_FILE_PATH, lut_array, Lm):
+def local_tone_mapping_lut(hdr_image_linear, fixed_point_matrix, Luminance_FILE_PATH, Bmatrix_FILE_PATH, lut_array, Lm, R, G, B, E):
     """執行使用客製化雙邊濾波器 (LUT 加速) 的 LTM 流程。"""
     R_orig, G_orig, B_orig = [hdr_image_linear[..., i] for i in range(3)]
+    R_orig = R / 256.0 * np.power(2, E-128.0)
+    G_orig = G / 256.0 * np.power(2, E-128.0)
+    B_orig = B / 256.0 * np.power(2, E-128.0)
 
     # # 1. 計算亮度 (Luminance)
-    # Lm = enforce_q_precision(0.2126 * R_orig + 0.7152 * G_orig + 0.0722 * B_orig, 10.0, 16)
+    Lm = 0.2126 * R_orig + 0.7152 * G_orig + 0.0722 * B_orig
 
     # # 2. 對數轉換
-    # I = enforce_q_precision(np.log10(Lm + EPSILON), 8.0, 14)
-    I = log_lookup(fixed_point_matrix, lut_array) / 1024.0
+    I = enforce_q_precision(np.log10(Lm + EPSILON), 12, 16)
+    # I = log_lookup(fixed_point_matrix, lut_array) / 1024.0
 
     # 3. 儲存 I 矩陣 (對數亮度)
     write_matrix_to_text_file(I, Luminance_FILE_PATH)
+    write_matrix_to_text_file(Lm, "data/Lm.txt")
     print(f"\n==================================================================")
     print(f"等待 C++ 處理：請執行 C++ 雙邊濾波器，將結果寫入 {Bmatrix_FILE_PATH}")
     print(f"==================================================================")
@@ -248,9 +252,9 @@ def read_hdr_rgbe(path):
             img[y]=scan
     return img,W,H
 
-REC709_R_INT = 54   # 近似 0.2126 * 255
-REC709_G_INT = 183  # 近似 0.7152 * 255
-REC709_B_INT = 18   # 近似 0.0722 * 255
+REC709_R_INT = 54   # 近似 0.2126 * 256
+REC709_G_INT = 183  # 近似 0.7152 * 256
+REC709_B_INT = 18   # 近似 0.0722 * 256
 
 def rgbe_to_fixed_point_12bit_optimized(rgbe_matrix):
     
@@ -263,12 +267,13 @@ def rgbe_to_fixed_point_12bit_optimized(rgbe_matrix):
 
     # Lm_scaled = R_m*54 + G_m*183 + B_m*18
     Lm_32bit = (REC709_R_INT * R_m) + (REC709_G_INT * G_m) + (REC709_B_INT * B_m)
-    Lm_8bit_mantissa = np.clip(np.floor(Lm_32bit / 256.0), 0, 255).astype(np.uint8)
-    E_4bits = ((E >> 4) & 0x0F).astype(np.uint16)
+    Lm_8bit_mantissa = Lm_32bit / 256.0
+    E_4bits = ((E >> 4)).astype(np.uint16)
     Lm_packed = Lm_8bit_mantissa.astype(np.uint16) << 4 
     final_12bit_fixed = Lm_packed | E_4bits
+    L = Lm_8bit_mantissa * np.power(2.0, E_4bits*16-32.0)
     
-    return final_12bit_fixed, Lm_8bit_mantissa
+    return final_12bit_fixed, L, R_m, G_m, B_m, E
 
 def log_lookup(value, lut_array):
     """
@@ -299,9 +304,9 @@ if __name__ == '__main__':
         lut_array_fixed = load_and_prepare_lut(LUT_EXCEL_PATH)
         hdr_input = read_hdr_image(HDR_FILE_PATH)
         rgbe_matrix, W, H = read_hdr_rgbe(HDR_FILE_PATH)
-        fixed_point_matrix, Lm_packed = rgbe_to_fixed_point_12bit_optimized(rgbe_matrix)
+        fixed_point_matrix, Lm_packed, R_m, G_m, B_m, E = rgbe_to_fixed_point_12bit_optimized(rgbe_matrix)
         print(f"\n最終定點數大小: {fixed_point_matrix.shape}, Dtype: {fixed_point_matrix.dtype}")
-        final_ldr_8bit_bgr = local_tone_mapping_lut(hdr_input, fixed_point_matrix, Luminance_FILE_PATH, Bmatrix_FILE_PATH, lut_array_fixed, Lm_packed)
+        final_ldr_8bit_bgr = local_tone_mapping_lut(hdr_input, fixed_point_matrix, Luminance_FILE_PATH, Bmatrix_FILE_PATH, lut_array_fixed, Lm_packed, R_m, G_m, B_m, E)
         save_ldr_file(final_ldr_8bit_bgr, LDR_OUTPUT_PATH)
         
     except FileNotFoundError as e:

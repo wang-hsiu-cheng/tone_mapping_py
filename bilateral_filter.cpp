@@ -42,9 +42,9 @@ float enforce_q_precision(float f_value, int fract_bits) {
     return (float)fixed_value_clipped / (float)scale;
 }
 
-const int FILTER_D = 9;        
+const int FILTER_D = 5;        
 const float SIGMA_R = 1.0;
-const float SIGMA_S = 2.5;    
+const float SIGMA_S = 1.5;    
 
 Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
     const double SIGMA_R_2 = enforce_q_precision(1 / (2.0 * std::pow(SIGMA_R, 2)), 6);
@@ -79,6 +79,7 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
 
     // 3. 滑動窗口掃描
     std::cout << "start scan" << std::endl;
+    double max = 0, min = 0;
 
     for (int i = 0; i < h; ++i) {
         // 顯示進度
@@ -121,8 +122,8 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
                         // I_q * total_weight (乘法結果需要鉗位)
                         float weighted_I_q = enforce_q_precision(total_weight * I_q, Q_FRACT);
                         
-                        denominator_float += total_weight;
-                        numerator_float += weighted_I_q;
+                        denominator_float = enforce_q_precision(denominator_float+total_weight, 10);
+                        numerator_float = enforce_q_precision(numerator_float+weighted_I_q, 10);
                     }
                 }
             }
@@ -131,6 +132,10 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
             float B_val;
             if (denominator_float > 0.0f) {
                 // 最終結果的除法需要鉗位
+                if (denominator_float > max || max == 0)
+                    max = denominator_float;
+                if (denominator_float < min || min == 0)
+                    min = denominator_float;
                 B_val = enforce_q_precision(numerator_float / denominator_float, Q_FRACT);
             } else {
                 B_val = I_p; // 避免除以零
@@ -139,6 +144,7 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
             B(i, j) = B_val; // Eigen 存取
         }
     }
+    std::cout << "denominator range from" << max << " to " << min << std::endl;
     
     return B;
 }
