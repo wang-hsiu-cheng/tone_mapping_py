@@ -359,10 +359,10 @@ if __name__ == '__main__':
         rgbe_matrix, W, H = read_hdr_rgbe(HDR_FILE_PATH)
         fixed_point_matrix, R_m, G_m, B_m, E = rgbe_to_fixed_point_12bit_optimized(rgbe_matrix)
         print(f"\n最終定點數大小: {fixed_point_matrix.shape}, Dtype: {fixed_point_matrix.dtype}")
-        final_ldr_8bit_bgr = local_tone_mapping_lut(fixed_point_matrix, Luminance_FILE_PATH, Bmatrix_FILE_PATH, lut_array_fixed, R_m, G_m, B_m, E)
         final_ldr_8bit_bgr1 = local_tone_mapping_opencv(fixed_point_matrix, lut_array_fixed, R_m, G_m, B_m, E)
-        save_ldr_file(final_ldr_8bit_bgr, LDR_OUTPUT_PATH)
         save_ldr_file(final_ldr_8bit_bgr1, LDR_OUTPUT_PATH1)
+        final_ldr_8bit_bgr = local_tone_mapping_lut(fixed_point_matrix, Luminance_FILE_PATH, Bmatrix_FILE_PATH, lut_array_fixed, R_m, G_m, B_m, E)
+        save_ldr_file(final_ldr_8bit_bgr, LDR_OUTPUT_PATH)
         
     except FileNotFoundError as e:
         print(f"錯誤: {e}\n請確認檔案路徑是否正確。")
