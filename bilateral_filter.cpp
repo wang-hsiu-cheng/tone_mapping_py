@@ -11,26 +11,60 @@
 
 // 範例：根據 Python 代碼中隱含的邏輯定義的常量 (N_BITS=16)
 const int Q_FRACT = 8;
-const int N_BITS = 16;
-const long long MAX_FIXED_VALUE = (1LL << (N_BITS - 1)) - 1; // 2^15 - 1
-const long long MIN_FIXED_VALUE = -(1LL << (N_BITS - 1));    // -2^15
-const int I_BITS = N_BITS - Q_FRACT; // 16 - 10 = 6
-const long long SCALE_FACTOR = (1LL << Q_FRACT); // 2^10 = 1024
+const int EXP_LUT_SIZE = 16384;
+std::vector<int> exp_lut;
 
-// 定義 LUT 數據類型 (用於儲存定點數，對應 Python 的 np.int64)
-using LutType = long long;
+std::vector<int> load_lut_from_txt(const std::string& filepath) {
+    // 1. 初始化 vector，確保它有足夠的容量
+    std::vector<int> lut_array(EXP_LUT_SIZE);
+    
+    // 為了安全起見，可以先用一個標記值 (例如 -1) 填充，以便追蹤未被設置的值
+    std::fill(lut_array.begin(), lut_array.end(), 0);
 
-// =========================================================
-// 1. fixed_to_float 函式
-// =========================================================
-float fixed_to_float(int64_t fixed_value, int fract_bits) {
-    long long scale = 1LL << fract_bits;
-    return (float)fixed_value / (float)scale;
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+        std::cerr << "ERROR: Failed to open file: " << filepath << std::endl;
+        return {}; // 返回空 vector
+    }
+    std::string line;
+    int line_count = 0;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue; // 跳過空行
+
+        std::stringstream ss(line);
+        int index = 0;
+        int value = 0;
+
+        // 嘗試從一行中讀取兩個整數
+        if (ss >> index >> value) {
+            line_count++;
+            
+            // 2. 邊界檢查
+            if (index < 0 || index >= EXP_LUT_SIZE) {
+                std::cerr << "WARNING: Index " << index << " out of bounds [0, " << EXP_LUT_SIZE - 1 << "] at line " << line_count << ". Skipping." << std::endl;
+                continue;
+            }
+
+            // 3. 填充矩陣 (LUT)
+            lut_array[index] = value;
+            
+        } else {
+            std::cerr << "WARNING: Failed to parse two integers at line " << line_count + 1 << ". Skipping." << std::endl;
+        }
+    }
+    std::cout << "Successfully loaded " << line_count << " entries." << std::endl;
+    if (line_count != EXP_LUT_SIZE) {
+        std::cout << "WARNING: Expected " << EXP_LUT_SIZE << " entries, found " << line_count << "." << std::endl;
+    }
+    return lut_array;
 }
+
 // =========================================================
 // 2. enforce_q_precision 函式 (朝向零的無條件捨去與飽和)
 // =========================================================
-float enforce_q_precision(float f_value, int fract_bits) {
+float enforce_q_precision(float f_value, int fract_bits, int total_bits) {
+    const long long MAX_FIXED_VALUE = (1LL << (total_bits - 1)) - 1; // 2^15 - 1
+    const long long MIN_FIXED_VALUE = -(1LL << (total_bits - 1));    // -2^15
     long long scale = 1LL << fract_bits;
     float scaled_value = f_value * (float)scale;
     int32_t fixed_value_unclipped = static_cast<int32_t>(std::trunc(scaled_value)); 
@@ -47,8 +81,8 @@ const float SIGMA_R = 1.0;
 const float SIGMA_S = 1.5;    
 
 Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
-    const double SIGMA_R_2 = enforce_q_precision(1 / (2.0 * std::pow(SIGMA_R, 2)), 6);
-    const double SIGMA_S_2 = enforce_q_precision(1 / (2.0 * std::pow(SIGMA_S, 2)), 6);
+    const double SIGMA_R_2 = enforce_q_precision(1 / (2.0 * std::pow(SIGMA_R, 2)), 6, 16);
+    const double SIGMA_S_2 = enforce_q_precision(1 / (2.0 * std::pow(SIGMA_S, 2)), 6, 16);
     std::cout << "start custom bf" << std::endl;
 
     // 1. 初始化
@@ -67,13 +101,14 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
             float dist_sq = (float)(i * i + j * j); 
             
             // 空間核輸入 (除法結果需要鉗位)
-            float exp_input = enforce_q_precision(dist_sq * SIGMA_S_2, Q_FRACT);
+            float exp_input = enforce_q_precision(dist_sq * SIGMA_S_2, 6, 12);
             
             // 計算 exp(-x) 並鉗位
-            float weight = std::exp(-exp_input); 
+            // float weight = std::exp(-exp_input); 
+            float weight = exp_lut[std::trunc(exp_input * 64)] / 1024.0;
             
             // Eigen 矩陣的元素存取: (行, 列)
-            spatial_kernel_float(i + r, j + r) = enforce_q_precision(weight, Q_FRACT);
+            spatial_kernel_float(i + r, j + r) = enforce_q_precision(weight, 10, 11);
         }
     }
 
@@ -108,22 +143,23 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
                         // --- 範圍核計算 (Range Kernel) ---
                         
                         // 減法結果和平方結果都需要鉗位
-                        float diff = enforce_q_precision(I_p - I_q, Q_FRACT);
-                        float diff_sq = enforce_q_precision(diff * diff, Q_FRACT); 
+                        float diff = enforce_q_precision(I_p - I_q, 8, 16);
+                        float diff_sq = enforce_q_precision(diff * diff, 8, 16); 
                         // 範圍核輸入 (除法結果需要鉗位)
-                        float range_exp_input = enforce_q_precision(diff_sq * SIGMA_R_2, Q_FRACT);
+                        float range_exp_input = enforce_q_precision(diff_sq * SIGMA_R_2, 6, 12);
                         // 查找並獲得 Qx.10 浮點數權重 (這裡直接計算 exp(-x) 並鉗位)
-                        float range_weight_float = enforce_q_precision(std::exp(-range_exp_input), Q_FRACT);
+                        // float range_weight_float = enforce_q_precision(std::exp(-range_exp_input), 6, 7);
+                        float range_weight_float = exp_lut[std::trunc(range_exp_input * 64)] / 1024.0;
                         // --- 總權重計算 ---
                         float spatial_weight_float = spatial_kernel_float(m + r, n + r); // Eigen 存取
                         // 總權重 (乘法結果需要鉗位)
-                        float total_weight = enforce_q_precision(spatial_weight_float * range_weight_float, Q_FRACT);
+                        float total_weight = enforce_q_precision(spatial_weight_float * range_weight_float, 10, 16);
                         // 累積
                         // I_q * total_weight (乘法結果需要鉗位)
-                        float weighted_I_q = enforce_q_precision(total_weight * I_q, Q_FRACT);
+                        float weighted_I_q = enforce_q_precision(total_weight * I_q, 8, 16);
                         
-                        denominator_float = enforce_q_precision(denominator_float+total_weight, 10);
-                        numerator_float = enforce_q_precision(numerator_float+weighted_I_q, 10);
+                        denominator_float = enforce_q_precision(denominator_float+total_weight, 8, 16);
+                        numerator_float = enforce_q_precision(numerator_float+weighted_I_q, 8, 16);
                     }
                 }
             }
@@ -136,7 +172,7 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
                     max = denominator_float;
                 if (denominator_float < min || min == 0)
                     min = denominator_float;
-                B_val = enforce_q_precision(numerator_float / denominator_float, Q_FRACT);
+                B_val = enforce_q_precision(numerator_float / denominator_float, 8, 16);
             } else {
                 B_val = I_p; // 避免除以零
             }
@@ -244,11 +280,13 @@ void write_matrix_to_text(const Eigen::MatrixXf& matrix, const std::string& file
 }
 
 int main() {
+    const std::string LUT_FILE = "LUT/exp.txt";
     const std::string I_FILE = "data/luminance.txt";
     const std::string OUTPUT_FILE_NAME = "data/B_matrix.txt";
     try {
         // 2. 讀取三個通道的數據
         Eigen::MatrixXf I_matrix = read_matrix_from_text(I_FILE);
+        exp_lut = load_lut_from_txt(LUT_FILE);
         
         std::cout << "\n Data Loading Successful. Starting Processing." << std::endl;
 

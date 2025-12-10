@@ -5,3 +5,4 @@ pyvenv.cfg
 /data/B_matrix.txt
 /data/luminance.txt
 bilateral_filter
+*t.py
