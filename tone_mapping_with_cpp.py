@@ -164,6 +164,7 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     # --- 3. 雙邊濾波 (以下流程不變) ---
     I_fixed = log_Lm + E_log2
     I = I_fixed / 1024.0
+    # 將 I 存進 SRAM
 
     # log 函數(輸出有進行定點數處理)
     # I = enforce_q_precision(np.log10(L + EPSILON), 8, 16)
@@ -174,6 +175,7 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     print(f"\n==================================================================")
     print(f"等待 C++ 處理：請執行 C++ 雙邊濾波器，將結果寫入 {Bmatrix_FILE_PATH}")
     print(f"==================================================================")
+    # 計算完的 B 會在 SRAM
 
     # 4. 等待 B_matrix.txt 檔案存在
     print(f"檢查檔案 {Bmatrix_FILE_PATH}...")
@@ -183,6 +185,7 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     
     # 5. 讀取 B 矩陣 (基礎層)
     B = read_matrix_from_text_file(Bmatrix_FILE_PATH)
+    # 只有軟體會有檢查步驟 之後硬體實作不會有
     if B is None:
         raise RuntimeError("無法從 B_matrix.txt 讀取基礎層矩陣，終止 LTM 流程。")
     # 檢查 B 的尺寸是否與 I 匹配
@@ -193,16 +196,17 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     D = I - B
 
     # 5. 基礎層壓縮
+    # 搜索整個 B matrix 找到 B_range
     max_B = B.max()
     min_B = B.min()
     B_range = max_B - min_B
-    k = np.log10(CONTRAST) / (B_range + EPSILON) if B_range >= EPSILON else 0.0
+    k = 1 / (B_range + EPSILON) if B_range >= EPSILON else 0.0 # 因為 contrast = 10 ，所以分子就是 1
     B_compressed = B * k
 
     # 6. 重建與色彩還原 (Reconstruction)
     I_prime = B_compressed + D
     L_prime = 10**(I_prime)
-    L_safe = np.where(L > EPSILON, L, EPSILON)
+    L_safe = np.where(L > EPSILON, L, EPSILON) # 把 L=0 的值全部替換成一個極小值
     ratio = L_prime / L_safe
 
     R_final = R_orig * ratio
@@ -212,7 +216,7 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     
     # 7. 輸出編碼與量化 (檔案儲存專用)
     LDR_final_normalized = np.clip(LDR_final_linear, 0, 1)
-    LDR_final_8bit_rgb = (LDR_final_normalized * 255).astype(np.uint8)
+    LDR_final_8bit_rgb = (LDR_final_normalized * 255).astype(np.uint8) # 把 RGB 結果存進 SRAM
     LDR_final_8bit_bgr = cv2.cvtColor(LDR_final_8bit_rgb, cv2.COLOR_RGB2BGR)
 
     return LDR_final_8bit_bgr
@@ -448,6 +452,7 @@ if __name__ == '__main__':
         final_ldr_8bit_bgr = local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R_m, G_m, B_m, E,
                                                     lut_data_l=(lut_x_l, lut_y_l), lut_data_e=(lut_x_e, lut_y_e))
         save_ldr_file(final_ldr_8bit_bgr, LDR_OUTPUT_PATH)
+        os.remove(Bmatrix_FILE_PATH)  # 圖像處理完成後自動刪除 B_matrix 檔案
         
     except FileNotFoundError as e:
         print(f"錯誤: {e}\n請確認檔案路徑是否正確。")
