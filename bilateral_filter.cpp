@@ -156,7 +156,7 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
                     // 範圍核輸入 (除法結果需要鉗位)
                     float range_exp_input = enforce_q_precision(diff_sq * SIGMA_R_2, 6, 12);
                     // float range_weight_float = enforce_q_precision(std::exp(-range_exp_input), 6, 7);
-                    float range_weight_float = exp_lut[std::trunc(range_exp_input * 1024)] / 1024.0;
+                    float range_weight_float = exp_lut[std::trunc(range_exp_input * 64)] / 1024.0;
                     // --- 總權重計算 ---
                     float spatial_weight_float = spatial_kernel_float(m + r, n + r); // Eigen 存取
                     // 總權重 (乘法結果需要鉗位)
