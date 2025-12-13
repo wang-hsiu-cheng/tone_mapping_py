@@ -206,13 +206,20 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E,
     I_float = (I_prime*LOG_2_10_FIXED/(2**15)) - I_int # signed Q0.12
     L_prime = 2**(I_int) * power_lut[np.trunc(I_float*2048).astype(np.int32)] / 2048.0 # L_prime = 2**(I_prime*3.321928)
     # L_prime = 10**(I_prime)
-    L = enforce_q_precision(L, 5, 14)
+    L = enforce_q_precision(L, 10, 19)
     L_safe = np.where(L > EPSILON, L, EPSILON) # 把 L=0 的值全部替換成一個極小值
     print(f"L_safe range from {L_safe.min()} to {L_safe.max()}") # input: Q8.4
-    # L_safe = enforce_q_precision(1 / L_safe, 14, 20)
-    L_safe = divide2_lut[np.trunc(L_safe*32).astype(np.int32)] / (2**12)
-    print(f"L_safe range from {L_safe.min()} to {L_safe.max()}")
-    ratio = L_prime * L_safe
+    # 把 9.10 浮點數 L 轉成 Q9.5 定點數的查表 index
+    L_lookup_idx = np.trunc(L * 32).astype(np.int16)+1
+    # -- 方法一：泰勒展開(二階) -- divide1_lut 是一階項、divide2_lut 是二階項
+    diff = L_safe*1024-L_lookup_idx*32 # fixed-point Q.10
+    L_fraction = (divide1_lut[L_lookup_idx] - divide2_lut[L_lookup_idx]*diff / 1024.0) / 1024.0
+    # -- 方法二：普通的查表 input Q8.5 output Q5.10
+    # L_fraction = divide1_lut[L_lookup_idx] / 1024.0
+    # -- 方法三：做除法然後 quantize (input Q9.10 output Q5.10)
+    # L_fraction = enforce_q_precision(1 / L_safe, 10, 15)
+    print(f"L_safe range from {L_fraction.min()} to {L_fraction.max()}")
+    ratio = L_prime * L_fraction
     print(f"ratio range from {ratio.min()} to {ratio.max()}")
 
     R_final = R_orig * ratio
@@ -442,8 +449,8 @@ if __name__ == '__main__':
 
     try:
         divide_lut = load_and_prepare_lut(LUT_PATH, 'divide6Q6', 4096)
-        divide1_lut = load_and_prepare_lut(LUT_PATH, 'divide8Q0', 256)
-        divide2_lut = load_and_prepare_lut(LUT_PATH, 'divide0Q10', 8192)
+        divide1_lut = load_and_prepare_lut(LUT_PATH, 'divide0Q13', 8192)
+        divide2_lut = load_and_prepare_lut(LUT_PATH, 'divide2_0Q13', 8192)
         power_lut = load_and_prepare_lut(LUT_PATH, 'power2', 4096)
         # 1. 讀取 LUT
         lut_x_l, lut_y_l = load_lut_from_excel(Lm_LUT, input_col="Lm(int16)", output_col="log(Lm)(q4.10)")

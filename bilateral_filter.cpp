@@ -102,7 +102,7 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
             float dist_sq = (float)(i * i + j * j); 
             
             // 空間核輸入 (除法結果需要鉗位)
-            float exp_input = enforce_q_precision(dist_sq * SIGMA_S_2, 6, 12);
+            float exp_input = enforce_q_precision(dist_sq * SIGMA_S_2, 10, 4);
             
             // 計算 exp(-x) 並鉗位
             // float weight = std::exp(-exp_input); 
