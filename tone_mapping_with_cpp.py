@@ -26,43 +26,33 @@ def load_lut_from_excel(file_path, input_col, output_col):
         print(f"讀取 LUT 失敗: {e}")
         return None, None
     
-def load_and_prepare_lut(excel_path, sheet_name='Log_Calculation_int'):
+def load_and_prepare_lut(excel_path, sheet_name, nrows):
     """
     載入 Excel 檔案，構建 LUT 查找表。
     假設 Column 0 (輸入) 和 Column 1 (輸出) 已經是量化後的整數定點數。
     """
     try:
-        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, skiprows=0, nrows=4096, 
-                             usecols=[0, 1], dtype=np.int64)
-        
-        if len(df) < 4096:
-            print(f"警告: LUT 讀取行數少於預期的 4096 行，實際讀取 {len(df)} 行。")
-        
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, skiprows=1, nrows=nrows, 
+                             usecols=[0, 3], dtype=np.int64)
+
+        if len(df) < nrows:
+            print(f"警告: LUT 讀取行數少於預期的 {nrows} 行，實際讀取 {len(df)} 行。")
+
         input_fixed_indices = df.iloc[:, 0].values
         output_fixed_weights = df.iloc[:, 1].values 
 
         if np.isnan(input_fixed_indices).any() or np.isnan(output_fixed_weights).any():
               raise ValueError("LUT 數據中包含非整數或缺失值 (NaN)。")
 
-        # 檢查索引範圍是否正確 (Q2.10 上限為 4095)
-        MAX_Q2_10_INDEX = (1 << (12)) - 1
-        
-        if input_fixed_indices.min() < 0 or input_fixed_indices.max() > MAX_Q2_10_INDEX:
-            print("-" * 50)
-            print("🚨 錯誤檢查: LUT 索引超出 Q2.10 範圍。")
-            print(f"轉換後的最大索引為 {input_fixed_indices.max()}，超過上限 {MAX_Q2_10_INDEX}。")
-            raise ValueError("LUT 索引超出 Q2.10 (0-4095) 範圍，請檢查 Column 0 數值是否小於或等於 4095。")
-            
-        lut_size = 1 << (12)
-        lut_array = np.zeros(lut_size, dtype=np.int64)
-        
+        lut_array = np.zeros(nrows, dtype=np.int64)
+
         for idx, val in zip(input_fixed_indices, output_fixed_weights):
-            if 0 <= idx < lut_size:
+            if 0 <= idx < nrows:
                 lut_array[idx] = val
-            
-        print(f"LUT 載入成功，大小: {lut_size} 點。")
+
+        print(f"LUT 載入成功，大小: {nrows} 點。")
         return lut_array
-        
+
     except Exception as e:
         raise RuntimeError(f"載入或處理 LUT 檔案時發生錯誤: {e}") from e
     
@@ -122,17 +112,17 @@ def enforce_q_precision(f_value, fract_bits, n_bits):
     # 縮放：將小數部分移到整數部分
     max = (1 << (n_bits - 1)) - 1
     min = -(1 << (n_bits - 1))
-    scaled_value = f_value * fract_bits
-    fixed_value_unclipped = np.trunc(scaled_value).astype(np.int32) 
+    scale_factor = 1 << fract_bits
+    scaled_value = f_value * scale_factor
+    fixed_value_unclipped = np.trunc(scaled_value).astype(np.int64) 
     fixed_value_clipped = np.clip(fixed_value_unclipped, min, max)
-    
-    # 3. 轉換回浮點數 (模擬硬體輸出)
-    return fixed_value_clipped / fract_bits
+    # 轉換回浮點數 (模擬硬體輸出)
+    return fixed_value_clipped / scale_factor
 
 FILTER_D = 5        # 濾波器直徑 (d)
 SIGMA_R = 1.0       # 範圍標準差 (sigmaColor/sigmaRange): 邊緣敏感度閾值
 SIGMA_S = 1.5       # 空間標準差 (sigmaSpace): 模糊半徑
-CONTRAST = 10.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
+CONTRAST = 100.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
 EPSILON = 1e-6      # 防止 log(0) 錯誤
 
 def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, lut_data_l=None, lut_data_e=None):
@@ -467,13 +457,14 @@ def save_ldr_file(image_data, output_path):
         print(f"檔案儲存失敗: {output_path}")
 
 if __name__ == '__main__':
-    HDR_FILE_PATH = "img/fog.hdr" 
-    LDR_OUTPUT_PATH = "img/fog.png"
-    LDR_OUTPUT_PATH1 = "img/fog_s.png" 
+    HDR_FILE_PATH = "img/Desk.hdr" 
+    LDR_OUTPUT_PATH = "img/Desk.png"
+    LDR_OUTPUT_PATH1 = "img/Desk_s.png" 
     
     Luminance_FILE_PATH = "data/luminance.txt"
     Bmatrix_FILE_PATH = "data/B_matrix.txt"
 
+    LUT_PATH = "LUT/LUT.xlsx"
     LUT_EXCEL_PATH = "LUT/log_calculation_int_2.xlsx" 
     Lm_LUT = "LUT/Lm_base_LUT.xlsx"
 
