@@ -83,7 +83,6 @@ const float SIGMA_S = 1.5;
 
 Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
     const double SIGMA_R_2 = enforce_q_precision(1 / (2.0 * std::pow(SIGMA_R, 2)), 6, 16);
-    const double SIGMA_S_2 = enforce_q_precision(1 / (2.0 * std::pow(SIGMA_S, 2)), 6, 16);
     std::cout << "start custom bf" << std::endl;
 
     // 1. 初始化
@@ -99,17 +98,14 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
     // 2. 預計算空間核 (Spatial Kernel)
     for (int i = -r; i <= r; ++i) {
         for (int j = -r; j <= r; ++j) {
-            float dist_sq = (float)(i * i + j * j); 
+            int dist_sq = i * i + j * j;
             
-            // 空間核輸入 (除法結果需要鉗位)
-            float exp_input = enforce_q_precision(dist_sq * SIGMA_S_2, 10, 4);
-            
-            // 計算 exp(-x) 並鉗位
-            // float weight = std::exp(-exp_input); 
-            float weight = exp_lut[std::trunc(exp_input * 1024)] / 1024.0;
-            
-            // Eigen 矩陣的元素存取: (行, 列)
-            spatial_kernel_float(i + r, j + r) = enforce_q_precision(weight, 10, 11);
+            if (dist_sq == 0) spatial_kernel_float(i + r, j + r) = (float)1024/1024;
+            else if (dist_sq == 1) spatial_kernel_float(i + r, j + r) = (float)820/1024;
+            else if (dist_sq == 2) spatial_kernel_float(i + r, j + r) = (float)421/1024;
+            else if (dist_sq == 4) spatial_kernel_float(i + r, j + r) = (float)29/1024;
+            else if (dist_sq == 5) spatial_kernel_float(i + r, j + r) = (float)4/1024;
+            else spatial_kernel_float(i + r, j + r) = (float)0;
         }
     }
 
@@ -154,21 +150,23 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
                     float diff = enforce_q_precision(I_p - I_q, 8, 16);
                     float diff_sq = enforce_q_precision(diff * diff, 8, 16);
                     // 範圍核輸入 (除法結果需要鉗位)
-                    float range_exp_input = enforce_q_precision(diff_sq * SIGMA_R_2, 6, 12);
+                    float range_exp_input = enforce_q_precision(diff_sq * SIGMA_R_2, 6, 10);
                     // float range_weight_float = enforce_q_precision(std::exp(-range_exp_input), 6, 7);
                     float range_weight_float = exp_lut[std::trunc(range_exp_input * 64)] / 1024.0;
                     // --- 總權重計算 ---
                     float spatial_weight_float = spatial_kernel_float(m + r, n + r); // Eigen 存取
                     // 總權重 (乘法結果需要鉗位)
-                    float total_weight = enforce_q_precision(spatial_weight_float * range_weight_float, 10, 16);
+                    float total_weight = enforce_q_precision(spatial_weight_float * range_weight_float, 10, 13);
                     // 累積
                     // I_q * total_weight (乘法結果需要鉗位)
                     float weighted_I_q = enforce_q_precision(total_weight * I_q, 8, 16);
                     
-                    denominator_float = enforce_q_precision(denominator_float+total_weight, 8, 16);
-                    numerator_float = enforce_q_precision(numerator_float+weighted_I_q, 8, 16);
+                    denominator_float = denominator_float+total_weight;
+                    numerator_float = numerator_float+weighted_I_q;
                 }
             }
+            denominator_float = enforce_q_precision(denominator_float, 8, 16);
+            numerator_float = enforce_q_precision(numerator_float, 8, 16);
             
             // 3. 歸一化 (除法)
             float B_val;
