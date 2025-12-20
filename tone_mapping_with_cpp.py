@@ -212,24 +212,37 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     I_prime = B_compressed + D
     print(f"I_prime range from {I_prime.min()} to {I_prime.max()}")
     LOG_2_10_FIXED = 108853 # 17-bit Q2.15
-    I_int = np.trunc(I_prime*LOG_2_10_FIXED/(2**15))
-    I_float = (I_prime*LOG_2_10_FIXED/(2**15)) - I_int # range: signed Q0.12
-    L_prime = 2**(I_int) * power_lut[np.trunc(I_float*2048).astype(np.int32)] / 2048.0 # L_prime = 2**(I_prime*3.321928)
-    # L_prime = 10**(I_prime)
-    L = enforce_q_precision(L, 10, 19)
-    L_safe = np.where(L > EPSILON, L, EPSILON) # 把 L=0 的值全部替換成一個極小值
-    print(f"L_safe range from {L_safe.min()} to {L_safe.max()}") # range: Q8.5
-    # 把 9.10 浮點數 L 轉成 Q9.5 定點數的查表 index
-    L_lookup_idx = np.trunc(L * 32).astype(np.int16)+1
-    # -- 方法一：泰勒展開(二階) -- divide1_lut 是一階項、divide2_lut 是二階項
-    diff = L_safe*1024-L_lookup_idx*32 # fixed-point Q.10
-    L_fraction = (divide1_lut[L_lookup_idx] - divide2_lut[L_lookup_idx]*diff / 1024.0) / 1024.0
-    # -- 方法二：普通的查表 input Q8.5 output Q5.10
+
+    ''' 把新的 I 轉成 L (硬體方法)'''
+    # I_int = np.trunc(I_prime*LOG_2_10_FIXED/(2**15))
+    # I_float = (I_prime*LOG_2_10_FIXED/(2**15)) - I_int # range: signed Q0.12
+    # L_prime = 2**(I_int) * power_lut[np.trunc(I_float*2048).astype(np.int32)] / 2048.0 # L_prime = 2**(I_prime*3.321928)
+    ''' 把新的 I 轉成 L (軟體方法)'''
+    L_prime = 10**(I_prime)
+    '''軟體直接進行除法'''
+    L_safe = np.where(L > EPSILON, L, EPSILON)
+    ratio = L_prime / L_safe
+
+    ''' 硬體進行 L 除法 LUT 的前處理 '''
+    # L = enforce_q_precision(L, 10, 19)
+    # L_safe = np.where(L > EPSILON, L, EPSILON) # 把 L=0 的值全部替換成一個極小值
+    # print(f"L_safe range from {L_safe.min()} to {L_safe.max()}")
+    # L_lookup_idx = np.trunc(L * 32).astype(np.int16)+1  # 把 9.10 浮點數 L 轉成 Q9.5 定點數的查表 index(無條件進位)
+    ''' -- 除法 LUT(方法一)：泰勒展開(二階) -- divide1_lut 是一階項、divide2_lut 是二階項 '''
+    # diff = L_safe*1024-L_lookup_idx*32 # fixed-point Q.10
+    # L_fraction = (divide1_lut[L_lookup_idx] - divide2_lut[L_lookup_idx]*diff / 1024.0) / 1024.0
+    ''' -- 除法 LUT(方法二)：普通的查表 input Q8.5 output Q5.10 '''
     # L_fraction = divide1_lut[L_lookup_idx] / 1024.0
-    # -- 方法三：做除法然後 quantize (input Q9.10 output Q5.10)
+    ''' -- 除法 LUT(方法三)：做除法然後 quantize (input Q9.10 output Q5.10) '''
     # L_fraction = enforce_q_precision(1 / L_safe, 10, 15)
-    print(f"L_safe range from {L_fraction.min()} to {L_fraction.max()}")
-    ratio = L_prime * L_fraction
+
+    # ratio = L_prime * L_fraction # 新舊 L 相除得到 ratio
+
+    I_ratio = I_prime - I
+    I_int = np.trunc(I_ratio*LOG_2_10_FIXED/(2**15))
+    I_float = (I_ratio*LOG_2_10_FIXED/(2**15)) - I_int
+    ratio = 2**(I_int) * power_lut[np.trunc(I_float*4096).astype(np.int32)] / 4096.0
+    # ratio = 10**(I_ratio)
     print(f"ratio range from {ratio.min()} to {ratio.max()}")
 
     R_final = R_orig * ratio
@@ -457,9 +470,9 @@ def save_ldr_file(image_data, output_path):
         print(f"檔案儲存失敗: {output_path}")
 
 if __name__ == '__main__':
-    HDR_FILE_PATH = "img/Desk.hdr" 
-    LDR_OUTPUT_PATH = "img/Desk.png"
-    LDR_OUTPUT_PATH1 = "img/Desk_s.png" 
+    HDR_FILE_PATH = "img/test_pattern.hdr" 
+    LDR_OUTPUT_PATH = "img/test_pattern.png"
+    LDR_OUTPUT_PATH1 = "img/test_pattern_s.png" 
     
     Luminance_FILE_PATH = "data/luminance.txt"
     Bmatrix_FILE_PATH = "data/B_matrix.txt"
@@ -470,9 +483,9 @@ if __name__ == '__main__':
 
     try:
         divide_lut = load_and_prepare_lut(LUT_PATH, 'divide6Q6', 4096)
-        divide1_lut = load_and_prepare_lut(LUT_PATH, 'divide0Q13', 8192)
-        divide2_lut = load_and_prepare_lut(LUT_PATH, 'divide2_0Q13', 8192)
-        power_lut = load_and_prepare_lut(LUT_PATH, 'power2', 4096)
+        divide1_lut = load_and_prepare_lut(LUT_PATH, 'divide0Q13', 8193)
+        divide2_lut = load_and_prepare_lut(LUT_PATH, 'divide2_0Q13', 8193)
+        power_lut = load_and_prepare_lut(LUT_PATH, 'power2', 8192)
         # 1. 讀取 LUT
         lut_x_l, lut_y_l = load_lut_from_excel(Lm_LUT, input_col="base 12 bit", output_col="1.base base value")
         if lut_x_l is None:
