@@ -218,10 +218,10 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     # I_float = (I_prime*LOG_2_10_FIXED/(2**15)) - I_int # range: signed Q0.12
     # L_prime = 2**(I_int) * power_lut[np.trunc(I_float*2048).astype(np.int32)] / 2048.0 # L_prime = 2**(I_prime*3.321928)
     ''' 把新的 I 轉成 L (軟體方法)'''
-    L_prime = 10**(I_prime)
+    # L_prime = 10**(I_prime)
     '''軟體直接進行除法'''
-    L_safe = np.where(L > EPSILON, L, EPSILON)
-    ratio = L_prime / L_safe
+    # L_safe = np.where(L > EPSILON, L, EPSILON)
+    # ratio = L_prime / L_safe
 
     ''' 硬體進行 L 除法 LUT 的前處理 '''
     # L = enforce_q_precision(L, 10, 19)
@@ -470,9 +470,9 @@ def save_ldr_file(image_data, output_path):
         print(f"檔案儲存失敗: {output_path}")
 
 if __name__ == '__main__':
-    HDR_FILE_PATH = "img/test_pattern.hdr" 
-    LDR_OUTPUT_PATH = "img/test_pattern.png"
-    LDR_OUTPUT_PATH1 = "img/test_pattern_s.png" 
+    HDR_FILE_PATH = "img/rose_garden.hdr" 
+    LDR_OUTPUT_PATH = "img/rose_garden.png"
+    LDR_OUTPUT_PATH1 = "img/rose_garden_s.png" 
     
     Luminance_FILE_PATH = "data/luminance.txt"
     Bmatrix_FILE_PATH = "data/B_matrix.txt"
