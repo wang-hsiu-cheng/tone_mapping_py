@@ -238,11 +238,14 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
 
     # ratio = L_prime * L_fraction # 新舊 L 相除得到 ratio
 
-    I_ratio = I_prime - I
-    I_int = np.trunc(I_ratio*LOG_2_10_FIXED/(2**15))
-    I_float = (I_ratio*LOG_2_10_FIXED/(2**15)) - I_int
-    ratio = 2**(I_int) * power_lut[np.trunc(I_float*4096).astype(np.int32)] / 4096.0
-    # ratio = 10**(I_ratio)
+    ''' 在 log 域處理除法 '''
+    # I_safe = np.where(I > np.log10(EPSILON), I, np.log10(EPSILON)) # 設定除數下限
+    I_safe = I
+    I_ratio = I_prime - I_safe # 除法
+    I_int = np.trunc(I_ratio*LOG_2_10_FIXED/(2**15)) # 找整數
+    I_float = (I_ratio*LOG_2_10_FIXED/(2**15)) - I_int # 找小數
+    ratio = 2**(I_int) * power_lut[np.trunc(I_float*4096).astype(np.int32)] / 4096.0 # 查表與位移
+    # ratio = 10**(I_ratio) # 軟體直接做 log10 反函數
     print(f"ratio range from {ratio.min()} to {ratio.max()}")
 
     R_final = R_orig * ratio
@@ -470,9 +473,9 @@ def save_ldr_file(image_data, output_path):
         print(f"檔案儲存失敗: {output_path}")
 
 if __name__ == '__main__':
-    HDR_FILE_PATH = "img/rose_garden.hdr" 
-    LDR_OUTPUT_PATH = "img/rose_garden.png"
-    LDR_OUTPUT_PATH1 = "img/rose_garden_s.png" 
+    HDR_FILE_PATH = "img/test_pattern.hdr" 
+    LDR_OUTPUT_PATH = "img/test_pattern.png"
+    LDR_OUTPUT_PATH1 = "img/test_pattern_s.png" 
     
     Luminance_FILE_PATH = "data/luminance.txt"
     Bmatrix_FILE_PATH = "data/B_matrix.txt"
