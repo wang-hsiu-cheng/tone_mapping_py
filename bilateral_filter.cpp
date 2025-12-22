@@ -68,7 +68,7 @@ float enforce_q_precision(float f_value, int fract_bits, int total_bits) {
     const long long MIN_FIXED_VALUE = -(1LL << (total_bits - 1));    // -2^15
     long long scale = 1LL << fract_bits;
     float scaled_value = f_value * (float)scale;
-    int32_t fixed_value_unclipped = static_cast<int32_t>(std::trunc(scaled_value)); 
+    int32_t fixed_value_unclipped = static_cast<int32_t>(std::floor(scaled_value)); 
     long long fixed_value_clipped = std::clamp(
         (long long)fixed_value_unclipped, 
         MIN_FIXED_VALUE, 
@@ -82,7 +82,7 @@ float enforce_uq_precision(float f_value, int fract_bits, int total_bits) {
     const long long MIN_FIXED_VALUE = 0;
     long long scale = 1LL << fract_bits;
     float scaled_value = f_value * (float)scale;
-    int32_t fixed_value_unclipped = static_cast<int32_t>(std::trunc(scaled_value)); 
+    int32_t fixed_value_unclipped = static_cast<int32_t>(std::floor(scaled_value)); 
     long long fixed_value_clipped = std::clamp(
         (long long)fixed_value_unclipped, 
         MIN_FIXED_VALUE, 
@@ -182,8 +182,8 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
                     float diff_sq = enforce_uq_precision(diff_abs * diff_abs, 28, 42); // UQ14.28
                     
                     // 範圍核輸入 (除法結果需要鉗位)
-                    float range_exp_input = enforce_uq_precision(diff_sq, 11, 3); // UQ3.11
-                    float range_weight_float = exp_lut[std::trunc(range_exp_input * 2048)] / 1024.0;
+                    float range_exp_input = enforce_uq_precision(diff_sq, 11, 14); // UQ3.11
+                    float range_weight_float = exp_lut[std::floor(range_exp_input * 2048.0f + 0.00001f)] / 1024.0;
                     // --- 總權重計算 ---
                     float spatial_weight_float = spatial_kernel_float(m + r, n + r); // Eigen 存取
                     // 總權重 (乘法結果需要鉗位)
@@ -196,10 +196,8 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
                     numerator_float = numerator_float+weighted_I_q;
                 }
             }
-            denominator_float = enforce_q_precision(denominator_float, 8, 16);
-            numerator_float = enforce_q_precision(numerator_float, 8, 16);
             
-            numerator_float = enforce_q_precision(numerator_float, 24, 35);    // Q11.34 -> Q11.24
+            numerator_float = enforce_q_precision(numerator_float, 24, 35);    // Q11.24 -> Q11.24
             denominator_float = enforce_uq_precision(denominator_float, 10, 13); // UQ3.10
             
             // 3. 歸一化 (除法)
@@ -211,7 +209,7 @@ Eigen::MatrixXf custom_bilateral_filter_with_lut(const Eigen::MatrixXf& I) {
                 if (denominator_float < min || min == 0)
                     min = denominator_float;
                 // 最終結果的除法需要鉗位
-                denominator_float = divide_lut[std::trunc(denominator_float * 1024)] / 1024.0;
+                denominator_float = divide_lut[std::floor(denominator_float * 1024.0f + 0.00001f)] / 1024.0;
                 B_val = enforce_q_precision(numerator_float * denominator_float, 14, 21);
             } else {
                 B_val = I_p; // 避免除以零

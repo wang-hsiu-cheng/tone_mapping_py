@@ -179,7 +179,33 @@ def load_and_prepare_lut(excel_path, sheet_name, nrows):
 
     except Exception as e:
         raise RuntimeError(f"載入或處理 LUT 檔案時發生錯誤: {e}") from e
-    
+
+def write_matrix_to_text_file_int(matrix, file_path):
+    """
+    將二維 NumPy 矩陣 (float) 轉換為 Q7.14 整數後寫入純文字檔案。
+    第一行格式: W H
+    內容: 整數值，以空格隔開。
+    """
+    try:
+        H, W = matrix.shape
+        
+        # 1. 放大 2^14 倍並使用 floor (向下取整) 
+        # 這樣負數的捨入行為才會與 Verilog 的 [MSB:LSB] 切片一致
+        # 例如: -0.0001 * 16384 = -1.6384 -> floor 後變成 -2
+        matrix_int = matrix.astype(np.int64)
+        
+        # 2. 準備寫入內容
+        header = f"{W} {H}\n"
+        
+        with open(file_path, 'w') as f:
+            f.write(header)
+            # 3. 使用 fmt='%d' 確保儲存為整數格式
+            np.savetxt(f, matrix_int, fmt='%d', delimiter=' ')
+
+        print(f"  成功儲存整數矩陣 (Q7.14) 到: {file_path} ({W}x{H})")
+    except Exception as e:
+        print(f"寫入檔案 {file_path} 失敗: {e}")
+
 def write_matrix_to_text_file(matrix, file_path):
     """
     將二維 NumPy 矩陣寫入純文字檔案。
@@ -257,7 +283,7 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
 
     # --- 1. 計算亮度 (Luminance) ---
     # 硬體公式: Sum = 256 權重 + 128 Bias (依據你的code)
-    Lm = 54 * R + 183 * G + 19 * B + 128
+    Lm = 54 * R + 183 * G + 19 * B
     
     # 計算真實浮點數亮度 (用於後續還原)
     E_float = E.astype(np.float32)
@@ -300,14 +326,17 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     except Exception as e:
         print(f"Failed to analyze/save I: {e}")
 
+    # 3. 儲存 I 矩陣 (對數亮度)
     I = I / 16384.0
+    write_matrix_to_text_file(I , Luminance_FILE_PATH)
+
+    
 
     # log 函數(輸出有進行定點數處理)
     # I = enforce_q_precision(np.log10(L + EPSILON), 8, 16)
 
-    # 3. 儲存 I 矩陣 (對數亮度)
-    write_matrix_to_text_file(I, Luminance_FILE_PATH)
-    write_matrix_to_text_file(L, "act_data/Lm.txt")
+    
+    # write_matrix_to_text_file(L, "act_data/Lm.txt")
     print(f"\n==================================================================")
     print(f"等待 C++ 處理：請執行 C++ 雙邊濾波器，將結果寫入 {Bmatrix_FILE_PATH}")
     print(f"==================================================================")
@@ -329,7 +358,7 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
         raise ValueError(f"讀取的 B 矩陣形狀 {B.shape} 與 I 矩陣形狀 {I.shape} 不匹配。")
     
     # 把 B 存到 dat
-    B_dat = (B * 16384).astype(np.int32) # 2^14
+    B_dat = np.floor(B * 16384).astype(np.int32) 
     try:
         basel_filename = generate_basel_dat_filename(pat_number)
         analyze_and_save_dat_fixed_point(B_dat, os.path.join("dat_file/basel", basel_filename))
