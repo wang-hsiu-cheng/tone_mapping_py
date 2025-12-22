@@ -22,7 +22,7 @@ end
 always @(*) begin
     diff_comb = p_in - q_in;
     if (diff_comb[21]) begin
-        diff_abs_next = -diff_comb[20:0];
+        diff_abs_next = -diff_comb;
     end else begin
         diff_abs_next = diff_comb[20:0];
     end

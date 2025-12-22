@@ -146,7 +146,9 @@ sram_act_b #(
 initial begin
     if(`FLAG_DUMPWV)begin
         $fsdbDumpfile("fp_local_tone_mapping.fsdb");
-        $fsdbDumpvars(0, LTM_top);
+        // $fsdbDumpvars("+mda", LTM_top);
+        $fsdbDumpvars(1, LTM_top);
+        $fsdbDumpvars(1, log_lum_controller);
     end
 end
 
@@ -309,6 +311,12 @@ task load_golden(
     end
 endtask
 
+// 1. 定義允許的誤差範圍 (例如 1 表示允許正負 1 的誤差)
+parameter TOLERANCE = 1; 
+
+integer diff;
+reg signed [20:0] hw_val, golden_val;
+
 task compare_output(input integer sram_sel);
     integer h, w;
     integer error_tmp;
@@ -325,6 +333,56 @@ task compare_output(input integer sram_sel);
                     error_total = error_total + 1;
                 end else begin
                     if(`FLAG_VERBOSE) $display("Sram #L row %0d PASS!", (h));
+                end
+            end
+            // summary of this pattern
+            if(`FLAG_VERBOSE) $display("\n========================================================================");
+            if(error_total == 0) begin
+                if(`FLAG_VERBOSE) $display("Congratulations! Your %s layer is correct!", layer_str);
+                if(`FLAG_VERBOSE) $display("Pattern No. %02d is successfully passed !", pat_idx);
+                else              $write("%c[1;32mPASS! %c[0m",27, 27);
+            end else begin
+                if(`FLAG_VERBOSE) $display("There are total %0d row hase errors in your %s layer.", error_total, layer_str);
+                if(`FLAG_VERBOSE) $display("Pattern No. %02d is failed...", pat_idx);
+                else              $write("%c[1;31mFAIL! %c[0m",27, 27);
+                total_err_pat = total_err_pat + 1;
+            end
+            if(`FLAG_VERBOSE) $display("========================================================================");
+            // $finish;
+        end
+
+        B: begin
+            for(h=0; h<HEIGHT; h=h+1) begin
+                error_tmp = 0;
+                for(w=0; w<WIDTH; w=w+1) begin
+                    // 2. 將 21-bit 位元轉為有符號整數進行運算
+                    // 使用符號擴展確保減法正確
+                    golden_val     = basel_sram_value[h*WIDTH+w][20:0];
+                    hw_val         = sram_act_b_u.mem[h*WIDTH+w][20:0];
+                    
+                    // 3. 計算差值
+                    diff = hw_val - golden_val;
+            
+                    // 4. 取絕對值 (Absolute Value)
+                    if (diff < 0) diff = -diff;
+                    
+                    // 5. 判斷是否超過容許範圍
+                    // 如果其中一個是 x 或 z，diff > TOLERANCE 會判斷為不成立，
+                    // 若要嚴謹一點可以先檢查是否為未知態
+                    if (sram_act_b_u.mem[h*WIDTH+w][20:0] === 21'dX) begin
+                        error_tmp = error_tmp + 1;
+                    end else if (diff > TOLERANCE) begin
+                        error_tmp = error_tmp + 1;
+                        // (選用) 打印出錯誤的值方便 Debug
+                        if(`FLAG_VERBOSE) $display("Error at [%0d,%0d]: HW=%d, Golden=%d, Diff=%d", h, w, hw_val, golden_val, diff);
+                    end
+                end
+            
+                if (error_tmp != 0) begin
+                    if(`FLAG_VERBOSE) $display("Sram #B row %0d FAIL! (Errors: %0d)", h, error_tmp);
+                    error_total = error_total + 1;
+                end else begin
+                    if(`FLAG_VERBOSE) $display("Sram #B row %0d PASS!", (h));
                 end
             end
             // summary of this pattern

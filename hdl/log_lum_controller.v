@@ -33,6 +33,7 @@ module log_lum_controller #(
 localparam IDLE = 3'd0;
 localparam READ = 3'd1;
 localparam PIPE = 3'd2;
+localparam BASE = 3'd3;
 localparam DONE = 3'd7;
 
 reg [2:0] state, next_state;
@@ -67,6 +68,15 @@ always @(*) begin
             end
         end
         PIPE: begin
+            if (w_counter >= 1279) begin
+                h_counter_next = h_counter + 1;
+                w_counter_next = 0;
+            end else begin
+                h_counter_next = h_counter;
+                w_counter_next = w_counter + 1;
+            end
+        end
+        BASE: begin
             if (w_counter >= 1279) begin
                 h_counter_next = h_counter + 1;
                 w_counter_next = 0;
@@ -121,7 +131,6 @@ log_lum log_lum_u (
 );
 
 // output sram l
-// get input sram data
 reg [10:0] w_out, w_out_next; // log2(1280) = 10.3
 reg  [9:0] h_out, h_out_next; // log2(720)  = 9.4
 always @(posedge clk) begin
@@ -147,6 +156,15 @@ always @(*) begin
                 w_out_next = w_out + 1;
             end
         end
+        BASE: begin
+            if (w_out >= 1279) begin
+                h_out_next = h_out + 1;
+                w_out_next = 0;
+            end else begin
+                h_out_next = h_out;
+                w_out_next = w_out + 1;
+            end
+        end
         default: begin
             h_out_next = h_out;
             w_out_next = w_out;
@@ -163,9 +181,79 @@ always @(posedge clk) begin
         if (next_state == PIPE) begin
             sram_wen_l <= 0;
             sram_wdata_l <= log_lum_out;
+        end else if (next_state == BASE && h_out_next <= 1279) begin
+            sram_wen_l <= 0;
+            sram_wdata_l <= log_lum_out;
         end else begin
             sram_wen_l <= 1;
             sram_wdata_l <= 0;
+        end
+    end
+end
+
+// base layer calculation
+wire signed [20:0] base_layer_out;
+base_layer_controller u_base_layer_controller (
+    .clk(clk),
+    .srst_n(srst_n),
+    // counter input
+    .w_counter(w_out),
+    .h_counter(h_out),
+    // Data input
+    .log_lum_out(log_lum_out),
+    // Data output
+    .base_layer_out(base_layer_out)
+);
+
+// output sram b
+reg [10:0] w_base_out, w_base_out_next; // log2(1280) = 10.3
+reg  [9:0] h_base_out, h_base_out_next; // log2(720)  = 9.4
+always @(posedge clk) begin
+    h_base_out <= h_base_out_next;
+    w_base_out <= w_base_out_next;
+end
+always @(*) begin
+    case(state)
+        IDLE: begin
+            h_base_out_next = 0;
+            w_base_out_next = 0;
+        end
+        READ: begin
+            h_base_out_next = 0;
+            w_base_out_next = 0;
+        end
+        PIPE: begin
+            h_base_out_next = 0;
+            w_base_out_next = 0;
+        end
+        BASE: begin
+            if (w_base_out >= 1279) begin
+                h_base_out_next = h_base_out + 1;
+                w_base_out_next = 0;
+            end else begin
+                h_base_out_next = h_base_out;
+                w_base_out_next = w_base_out + 1;
+            end
+        end
+        default: begin
+            h_base_out_next = h_base_out;
+            w_base_out_next = w_base_out;
+        end
+    endcase
+end
+always @(posedge clk) begin
+    if (~srst_n) begin
+        sram_addr_b <= 0;
+        sram_wen_b <= 1;
+        sram_wdata_b <= 0;
+    end else begin
+        sram_addr_b <= h_base_out_next * 1280 + w_base_out_next;
+        if (next_state == BASE) begin
+            sram_wen_b <= 0;
+            sram_wdata_b <= base_layer_out;
+        end else begin
+            sram_wen_b <= 1;
+            sram_wdata_b <= 0;
         end
     end
 end
@@ -183,7 +271,11 @@ always @(*) begin
             else next_state = state;
         end
         PIPE: begin
-            if (h_out >= 719 && w_out >= 1279 ) next_state = DONE;
+            if (h_counter >= 2 && w_counter >= 15) next_state = BASE;
+            else next_state = state;
+        end
+        BASE: begin
+            if (h_base_out >= 719 && w_base_out >= 1279 ) next_state = DONE;
             else next_state = state;
         end
         DONE: begin
