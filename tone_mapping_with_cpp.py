@@ -277,9 +277,6 @@ EPSILON = 1e-6      # 防止 log(0) 錯誤
 
 def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, lut_data_l=None, lut_data_e=None, pat_number=0):
     """執行使用客製化雙邊濾波器 (LUT 加速) 的 LTM 流程。"""
-    R_orig = (R / 256.0) * np.power(2, E-128.0)
-    G_orig = (G / 256.0) * np.power(2, E-128.0)
-    B_orig = (B / 256.0) * np.power(2, E-128.0)
 
     # --- 1. 計算亮度 (Luminance) ---
     # 硬體公式: Sum = 256 權重 + 128 Bias (依據你的code)
@@ -327,10 +324,10 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
         print(f"Failed to analyze/save I: {e}")
 
     # 3. 儲存 I 矩陣 (對數亮度)
-    I = I / 16384.0
-    write_matrix_to_text_file(I , Luminance_FILE_PATH)
-
     
+    write_matrix_to_text_file_int(I , Luminance_FILE_PATH)
+
+    # I = I / 16384.0
 
     # log 函數(輸出有進行定點數處理)
     # I = enforce_q_precision(np.log10(L + EPSILON), 8, 16)
@@ -349,85 +346,109 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
         time.sleep(1)
     
     # 5. 讀取 B 矩陣 (基礎層)
-    B = read_matrix_from_text_file(Bmatrix_FILE_PATH)
+    BB = read_matrix_from_text_file(Bmatrix_FILE_PATH)
     # 只有軟體會有檢查步驟 之後硬體實作不會有
-    if B is None:
+    if BB is None:
         raise RuntimeError("無法從 B_matrix.txt 讀取基礎層矩陣，終止 LTM 流程。")
     # 檢查 B 的尺寸是否與 I 匹配
-    if B.shape != I.shape:
+    if BB.shape != I.shape:
         raise ValueError(f"讀取的 B 矩陣形狀 {B.shape} 與 I 矩陣形狀 {I.shape} 不匹配。")
-    
     # 把 B 存到 dat
-    B_dat = np.floor(B * 16384).astype(np.int32) 
+    B_dat = BB.astype(np.int32)
+
     try:
         basel_filename = generate_basel_dat_filename(pat_number)
         analyze_and_save_dat_fixed_point(B_dat, os.path.join("dat_file/basel", basel_filename))
     except Exception as e:
         print(f"Failed to analyze/save Base Layer: {e}")
 
+    # B = B.astype(np.float32) / 16384.0
+    BB = BB.astype(np.int64)
+    I = I.astype(np.int64)
+    print(f"I range from {I.min()} to {I.max()}") # range: Q7.14
 
     # 4. 分解為細節層 D
-    D = I - B
+    D = I - BB
+    print(f"D range from {D.min()} to {D.max()}") # range: Q7.14
 
     # 5. 基礎層壓縮
     # 搜索整個 B matrix 找到 B_range
-    max_B = B.max()
-    min_B = B.min()
-    print(f"B range from {min_B} to {max_B}") # range: Q6.6
-    B_range = max_B - min_B
-    k = divide_lut[np.trunc(B_range * 64).astype(np.int32)] / (2**11) # input Q6.6 output Q6.12, contrast = 100
+    max_B = BB.max()
+    min_B = BB.min()
+    print(f"BB range from {min_B} to {max_B}") # range: Q6.6
+    B_range = max_B - min_B # Q7.14
+    B_range.astype(np.int64)
+    print(B_range, B_range / 2**8, np.floor(B_range / 2**8))
+    divide_lut_index = np.floor(B_range / 2**8).astype(np.int32)
+    k = divide_lut[divide_lut_index] * 2 # input Q6.6 output Q6.12, contrast = 100
     # k = 1 / (B_range + EPSILON) if B_range >= EPSILON else 0.0 # 因為 contrast = 10 ，所以分子就是 1
-    B_compressed = B * k
+    B_compressed = BB * k # 7.14 * 6.12
+    B_compressed = np.floor(B_compressed / 2**12).astype(np.int32) #Q13.14
 
     # 6. 重建與色彩還原 (Reconstruction)
     I_prime = B_compressed + D
     print(f"I_prime range from {I_prime.min()} to {I_prime.max()}")
     LOG_2_10_FIXED = 108853 # 17-bit Q2.15
 
-    ''' 把新的 I 轉成 L (硬體方法)'''
-    # I_int = np.trunc(I_prime*LOG_2_10_FIXED/(2**15))
-    # I_float = (I_prime*LOG_2_10_FIXED/(2**15)) - I_int # range: signed Q0.12
-    # L_prime = 2**(I_int) * power_lut[np.trunc(I_float*2048).astype(np.int32)] / 2048.0 # L_prime = 2**(I_prime*3.321928)
-    ''' 把新的 I 轉成 L (軟體方法)'''
-    # L_prime = 10**(I_prime)
-    '''軟體直接進行除法'''
-    # L_safe = np.where(L > EPSILON, L, EPSILON)
-    # ratio = L_prime / L_safe
-
-    ''' 硬體進行 L 除法 LUT 的前處理 '''
-    # L = enforce_q_precision(L, 10, 19)
-    # L_safe = np.where(L > EPSILON, L, EPSILON) # 把 L=0 的值全部替換成一個極小值
-    # print(f"L_safe range from {L_safe.min()} to {L_safe.max()}")
-    # L_lookup_idx = np.trunc(L * 32).astype(np.int16)+1  # 把 9.10 浮點數 L 轉成 Q9.5 定點數的查表 index(無條件進位)
-    ''' -- 除法 LUT(方法一)：泰勒展開(二階) -- divide1_lut 是一階項、divide2_lut 是二階項 '''
-    # diff = L_safe*1024-L_lookup_idx*32 # fixed-point Q.10
-    # L_fraction = (divide1_lut[L_lookup_idx] - divide2_lut[L_lookup_idx]*diff / 1024.0) / 1024.0
-    ''' -- 除法 LUT(方法二)：普通的查表 input Q8.5 output Q5.10 '''
-    # L_fraction = divide1_lut[L_lookup_idx] / 1024.0
-    ''' -- 除法 LUT(方法三)：做除法然後 quantize (input Q9.10 output Q5.10) '''
-    # L_fraction = enforce_q_precision(1 / L_safe, 10, 15)
-
-    # ratio = L_prime * L_fraction # 新舊 L 相除得到 ratio
-
-    ''' 在 log 域處理除法 '''
-    # I_safe = np.where(I > np.log10(EPSILON), I, np.log10(EPSILON)) # 設定除數下限
     I_safe = I
     I_ratio = I_prime - I_safe # 除法
-    I_int = np.trunc(I_ratio*LOG_2_10_FIXED/(2**15)) # 找整數
-    I_float = (I_ratio*LOG_2_10_FIXED/(2**15)) - I_int # 找小數
-    ratio = 2**(I_int) * power_lut[np.trunc(I_float*4096).astype(np.int32)] / 4096.0 # 查表與位移
-    # ratio = 10**(I_ratio) # 軟體直接做 log10 反函數
-    print(f"ratio range from {ratio.min()} to {ratio.max()}")
+    print(f"I_ratio range from {I_ratio.min()} to {I_ratio.max()}")
+    temp_log2 = np.trunc(I_ratio*LOG_2_10_FIXED / 2**(15)).astype(np.int32)
+    print(f"temp_log2 range from {temp_log2.min()} to {temp_log2.max()}")
+    I_int = np.floor(temp_log2 / 2**(14)).astype(np.int32)
+    print(f"I_int range from {I_int.min()} to {I_int.max()}")
+    I_frac = temp_log2 - (I_int.astype(np.int64) * (2**14))
+    print(f"I_frac range from {I_frac.min()} to {I_frac.max()}")
+    power_lut_index = np.floor(I_frac / 2**2).astype(np.int32)
+    print(f"power_lut_index range from {power_lut_index.min()} to {power_lut_index.max()}")
+    ratio = power_lut[power_lut_index] # 查表與位移
+    # ratio_fix = enforce_q_precision(ratio, 12, 21) # 模擬硬體定點數輸出 // UQ
+    # ratio_fix_raw = (ratio_fix * 4096).astype(np.int64)
 
-    R_final = R_orig * ratio
-    G_final = G_orig * ratio
-    B_final = B_orig * ratio
-    LDR_final_linear = np.stack([R_final, G_final, B_final], axis=-1)
+    print(f"ratio range from {ratio.min()} to {ratio.max()}")
+    print(f"E range from {E.min()} to {E.max()}")
+    total_shift = E.astype(np.int32) - 140 + I_int.astype(np.int32)
+    print(f"total_shift range from {total_shift.min()} to {total_shift.max()}")
+
+    R_temp = R.astype(np.int64) * ratio
+    G_temp = G.astype(np.int64) * ratio
+    B_temp = B.astype(np.int64) * ratio
+
+    # 模擬桶形移位器 (Barrel Shifter)
+    # 當 total_shift 為負時 (如 -23)，執行右移 23 位
+    # 當 total_shift 為正時，執行左移
+    R_final_int = np.where(total_shift >= 0, 
+                        R_temp << np.abs(total_shift), 
+                        R_temp >> np.abs(total_shift))
+
+    G_final_int = np.where(total_shift >= 0, 
+                        G_temp << np.abs(total_shift), 
+                        G_temp >> np.abs(total_shift))
+
+    B_final_int = np.where(total_shift >= 0, 
+                        B_temp << np.abs(total_shift), 
+                        B_temp >> np.abs(total_shift))
     
-    # 7. 輸出編碼與量化 (檔案儲存專用)
-    LDR_final_normalized = np.clip(LDR_final_linear, 0, 1)
-    LDR_final_8bit_rgb = (LDR_final_normalized * 255).astype(np.uint8) # 把 RGB 結果存進 SRAM
-    LDR_final_8bit_bgr = cv2.cvtColor(LDR_final_8bit_rgb, cv2.COLOR_RGB2BGR)
+    print(f"R_final_int range from {R_final_int.min()} to {R_final_int.max()}")
+    print(f"G_final_int range from {G_final_int.min()} to {G_final_int.max()}")
+    print(f"B_final_int range from {B_final_int.min()} to {B_final_int.max()}")
+
+    print(f"R_final_int range from {np.clip(R_final_int, 0, 255).min()} to {np.clip(R_final_int, 0, 255).max()}")
+    print(f"G_final_int range from {np.clip(G_final_int, 0, 255).min()} to {np.clip(G_final_int, 0, 255).max()}")
+    print(f"B_final_int range from {np.clip(B_final_int, 0, 255).min()} to {np.clip(B_final_int, 0, 255).max()}")
+
+    # 最後進行 8-bit 飽和與型別轉換
+    R_out = np.clip(R_final_int, 0, 255).astype(np.uint8)
+    G_out = np.clip(G_final_int, 0, 255).astype(np.uint8)
+    B_out = np.clip(B_final_int, 0, 255).astype(np.uint8)
+
+    # LDR_final_linear = np.stack([R_final, G_final, B_final], axis=-1)
+    
+    # # 7. 輸出編碼與量化 (檔案儲存專用)
+    # LDR_final_normalized = np.clip(LDR_final_linear, 0, 1)
+    # LDR_final_8bit_rgb = (LDR_final_normalized * 255).astype(np.uint8) # 把 RGB 結果存進 SRAM
+    # LDR_final_8bit_bgr = cv2.cvtColor(LDR_final_8bit_rgb, cv2.COLOR_RGB2BGR)
+    LDR_final_8bit_bgr = cv2.merge([B_out, G_out, R_out])
 
     return LDR_final_8bit_bgr
 
@@ -439,57 +460,60 @@ def local_tone_mapping_opencv(R, G, B, E, lut_data_l=None):
    # --- 1. 計算亮度 (Luminance) ---
     # 硬體公式: Sum = 256 權重 + 128 Bias (依據你的code)
     # 轉型為 uint16 計算，避免乘法溢位
-    R = R.astype(np.uint16)
-    G = G.astype(np.uint16)
-    B = B.astype(np.uint16)
-    E = E.astype(np.int16)
+    R_orig = R_orig.astype(np.float32)
+    G_orig = G_orig.astype(np.float32)
+    B_orig = B_orig.astype(np.float32)
+    E = E.astype(np.float32)
 
-    Lm = 54 * R + 183 * G + 19 * B + 128
+    L = R_orig * 0.2126 + G_orig * 0.7152 + B_orig * 0.0722
+    # Lm = 54 * R + 183 * G + 19 * B + 128
     
     # 計算真實浮點數亮度 (用於後續還原)
-    E_float = E.astype(np.float32)
-    L = Lm * np.exp2(E_float - 144)
+    # E_float = E.astype(np.float32)
+    # L = Lm * np.exp2(E_float - 144)
 
-    # --- 2. 硬體 Log10 模擬 (關鍵修正區) ---
-    lut_x_l, lut_y_l = lut_data_l
-    lut_y_l = np.array(lut_y_l).astype(np.int32) # LUT 轉 int32
+    # # --- 2. 硬體 Log10 模擬 (關鍵修正區) ---
+    # lut_x_l, lut_y_l = lut_data_l
+    # lut_y_l = np.array(lut_y_l).astype(np.int32) # LUT 轉 int32
 
-    # [FIX 1] 避免 log2(0) 造成 -inf
-    Lm_safe = np.maximum(Lm, 1)
+    # # [FIX 1] 避免 log2(0) 造成 -inf
+    # Lm_safe = np.maximum(Lm, 1)
 
-    # [FIX 2] 向量化計算 MSB (比 pixel-by-pixel 快1000倍且準確)
-    msb = np.floor(np.log2(Lm_safe)).astype(np.int32)
+    # # [FIX 2] 向量化計算 MSB (比 pixel-by-pixel 快1000倍且準確)
+    # msb = np.floor(np.log2(Lm_safe)).astype(np.int32)
     
-    TARGET_MSB = 15
-    shift = TARGET_MSB - msb
+    # TARGET_MSB = 15
+    # shift = TARGET_MSB - msb
     
-    # [FIX 3 - 解決黑點!] 必須轉成 int32 再移位，否則 16-bit 移位會溢位變成 0
-    reg = Lm.astype(np.int32) << shift
+    # # [FIX 3 - 解決黑點!] 必須轉成 int32 再移位，否則 16-bit 移位會溢位變成 0
+    # reg = Lm.astype(np.int32) << shift
 
-    # 取出 Index (Bit 14~3)
-    idx = (reg >> 3) & 0xFFF
-    base = lut_y_l[idx]
+    # # 取出 Index (Bit 14~3)
+    # idx = (reg >> 3) & 0xFFF
+    # base = lut_y_l[idx]
 
-    # 計算 Exponent
-    # 假設你的權重對應是 -16 (Sum=256 是 -8, 這裡可能是配合其他縮放)
-    exp_val = (E.astype(np.int32) - 128) + msb - 16
-    LOG2_CONST = int(math.log10(2) * (1 << 14)) # Q14 format
-    exp_log = exp_val * LOG2_CONST
+    # # 計算 Exponent
+    # # 假設你的權重對應是 -16 (Sum=256 是 -8, 這裡可能是配合其他縮放)
+    # exp_val = (E.astype(np.int32) - 128) + msb - 16
+    # LOG2_CONST = int(math.log10(2) * (1 << 14)) # Q14 format
+    # exp_log = exp_val * LOG2_CONST
 
-    # 得到 Log 域的亮度 (I)
-    I = base + exp_log
+    # # 得到 Log 域的亮度 (I)
+    # I = base + exp_log
+    I = np.log10(L + EPSILON)
 
     # --- 3. 雙邊濾波與 Tone Mapping ---
     # I 是 Q14，需要轉回 float 進行 OpenCV 濾波
     # 注意: 如果 LUT output 是 Q14，這裡除以 16384.0 (2^14) 比較合理
     # 但你的 code 之前是除以 1024，請確認你的 LUT 數值縮放
     # 這裡假設你的 base 和 exp_log 都是 Q14
-    I_float32 = I.astype(np.float32) / 16384.0
+    I_safe = np.nan_to_num(I, nan=0.0, posinf=0.0, neginf=0.0)
+    # I_float32 = I.astype(np.float32) / 16384.0
 
-    B = cv2.bilateralFilter(I_float32, FILTER_D, SIGMA_R, SIGMA_S)
+    B = cv2.bilateralFilter(I, FILTER_D, SIGMA_R, SIGMA_S)
 
     # --- 4. 分解為細節層 D ---
-    D = I_float32 - B
+    D = I - B
 
     # --- 5. 基礎層壓縮 ---
     max_B = B.max()
@@ -623,7 +647,7 @@ def save_ldr_file(image_data, output_path):
 
 if __name__ == '__main__':
     # I/O file name
-    pat_number = 0
+    pat_number = 14
     HDR_FILE_NAME = generate_hdr_filename(pat_number)
     HDR_FILE_PATH = os.path.join("hdr_pat", HDR_FILE_NAME)
     LDR_FILE_NAME = generate_png_filename(pat_number)
