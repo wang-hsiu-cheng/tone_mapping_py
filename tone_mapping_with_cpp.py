@@ -4,6 +4,130 @@ import pandas as pd
 import os
 import time
 import math
+import warnings
+
+def generate_hdr_filename(pattern_number):
+  """
+  根據給定的數字產生 PAT_XXX.hdr 格式的檔名。
+
+  Args:
+    pattern_number (int): 0 到 999 之間的數字。
+
+  Returns:
+    str: 格式化後的檔名字串，例如 "PAT_005.hdr"。
+  """
+  # 使用 f-string 進行格式化
+  # {pattern_number:03d} 的意思是：
+  #   - 0: 不足的位數用 0 填充
+  #   - 3: 總寬度為 3 位
+  #   - d: 以十進位整數形式格式化
+  return f"PAT_{pattern_number:03d}.hdr"
+
+def generate_png_filename(pattern_number):
+  return f"PAT_{pattern_number:03d}.png"
+
+def generate_spng_filename(pattern_number):
+  return f"PAT_{pattern_number:03d}_s.png"
+
+def generate_input_dat_filename(pattern_number):
+  return f"input_{pattern_number:03d}.dat"
+
+def generate_lgnum_dat_filename(pattern_number):
+  return f"lglum_{pattern_number:03d}.dat"
+
+def generate_basel_dat_filename(pattern_number):
+  return f"basel_{pattern_number:03d}.dat"
+
+def write_dat_4bytes(hdr4, filename):
+    """
+    hdr4: H x W x 4 uint8 RGBE，E 已 clip 到 4-bit signed範圍
+    filename: 輸出的 .dat 檔
+    每個 pixel 4 bytes (R,G,B,E)，直接 hex 寫入，每行一個 pixel
+    """
+    H, W, _ = hdr4.shape
+    with open(filename, "w") as f:
+        for y in range(H):
+            for x in range(W):
+                pixel = hdr4[y, x]
+
+                # 直接用 4 個 f.write (hex)
+                f.write("{:02X}".format(int(pixel[0].item())))  # R
+                f.write("{:02X}".format(int(pixel[1].item())))  # G
+                f.write("{:02X}".format(int(pixel[2].item())))  # B
+                f.write("{:02X}".format(int(pixel[3].item())))  # E
+                f.write(f" // {pixel[0]} {pixel[1]} {pixel[2]} {pixel[3]}")
+                f.write("\n")  # 每行一個 pixel
+    print("✔ DAT file saved:", filename)
+
+def analyze_and_save_dat_fixed_point(I, filename='I_values.dat'):
+    """
+    Analyzes an INT32 numpy array assuming it contains Q7.14 fixed-point integer values.
+    It checks if the values are within the valid 22-bit range, reports any
+    out-of-range values, and saves the numbers in 32-bit hexadecimal format to a
+    .dat file.
+
+    Each line in the output file includes the original integer value as a comment.
+    The output format is: `xxxxxxxx  // original_integer_value`
+
+    The valid integer range for Q7.14 (21-bit signed) is [-1048576, 1048575].
+    """
+    arr = np.asarray(I)
+    if not np.issubdtype(arr.dtype, np.signedinteger):
+        raise TypeError("Input array must be a signed integer type.")
+
+    stats = {}
+    stats['dtype'] = str(arr.dtype)
+    stats['shape'] = list(arr.shape)
+    if arr.size > 0:
+        stats['min'] = int(arr.min())
+        stats['max'] = int(arr.max())
+    else:
+        stats['min'] = None
+        stats['max'] = None
+
+    print("[analyze_and_save_dat] Input dtype:", stats['dtype'], "shape:", stats['shape'])
+    print("[analyze_and_save_dat] Input integer min/max:", stats['min'], stats['max'])
+
+    MIN_Q7_14_INT = -1048576  # -2**20
+    MAX_Q7_14_INT = 1048575   # 2**20 - 1
+
+    H, W = arr.shape
+    out_of_range_found = False
+
+    with open(filename, "w") as f:
+        for y in range(H):
+            for x in range(W):
+                # 儲存原始數值，用於註解
+                original_pixel_val = int(arr[y, x])
+                
+                # 複製一份數值來進行處理 (clamping 和轉換)
+                processed_pixel_val = original_pixel_val
+
+                # 1. 檢查原始數值是否在範圍內
+                if not (MIN_Q7_14_INT <= original_pixel_val <= MAX_Q7_14_INT):
+                    warnings.warn(
+                        f"[Out of Range] Value {original_pixel_val} at position ({y}, {x}) is outside "
+                        f"the Q7.14 integer range [{MIN_Q7_14_INT}, {MAX_Q7_14_INT}]."
+                    )
+                    out_of_range_found = True
+                    # 將要處理的數值截斷到有效範圍
+                    processed_pixel_val = np.clip(original_pixel_val, MIN_Q7_14_INT, MAX_Q7_14_INT)
+
+                # 2. 處理負數的二補數 (基於 32-bit)
+                if processed_pixel_val < 0:
+                    processed_pixel_val += (1 << 32)
+
+                # 3. 格式化為 8 位十六進制數
+                hex_val = f"{processed_pixel_val:08x}"
+
+                # 4. 寫入檔案，包含對齊的註解
+                #    {hex_val:<10} 表示將 hex_val 左對齊，佔用 10 個字元寬度
+                f.write(f"{hex_val:<10} // {original_pixel_val}\n")
+
+    if not out_of_range_found:
+        print("✔ All values were within the Q7.14 range.")
+
+    print(f"✔ DAT file saved: {filename}")
 
 def load_lut_from_excel(file_path, input_col, output_col):
     """
@@ -125,7 +249,7 @@ SIGMA_S = 1.5       # 空間標準差 (sigmaSpace): 模糊半徑
 CONTRAST = 100.0      # 基礎層壓縮參數：目標對比度 (關鍵可調參數)
 EPSILON = 1e-6      # 防止 log(0) 錯誤
 
-def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, lut_data_l=None, lut_data_e=None):
+def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, lut_data_l=None, lut_data_e=None, pat_number=0):
     """執行使用客製化雙邊濾波器 (LUT 加速) 的 LTM 流程。"""
     R_orig = (R / 256.0) * np.power(2, E-128.0)
     G_orig = (G / 256.0) * np.power(2, E-128.0)
@@ -167,14 +291,23 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
 
     # 得到 Log 域的亮度 (I)
     I = base + exp_log
-    I = I / 16384
+
+    # Save and analyze I values
+    
+    try:
+        lglum_filename = generate_lgnum_dat_filename(pat_number)
+        analyze_and_save_dat_fixed_point(I, os.path.join("dat_file/lglum", lglum_filename))
+    except Exception as e:
+        print(f"Failed to analyze/save I: {e}")
+
+    I = I / 16384.0
 
     # log 函數(輸出有進行定點數處理)
     # I = enforce_q_precision(np.log10(L + EPSILON), 8, 16)
 
     # 3. 儲存 I 矩陣 (對數亮度)
     write_matrix_to_text_file(I, Luminance_FILE_PATH)
-    write_matrix_to_text_file(L, "data/Lm.txt")
+    write_matrix_to_text_file(L, "act_data/Lm.txt")
     print(f"\n==================================================================")
     print(f"等待 C++ 處理：請執行 C++ 雙邊濾波器，將結果寫入 {Bmatrix_FILE_PATH}")
     print(f"==================================================================")
@@ -194,6 +327,15 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     # 檢查 B 的尺寸是否與 I 匹配
     if B.shape != I.shape:
         raise ValueError(f"讀取的 B 矩陣形狀 {B.shape} 與 I 矩陣形狀 {I.shape} 不匹配。")
+    
+    # 把 B 存到 dat
+    B_dat = (B * 16384).astype(np.int32) # 2^14
+    try:
+        basel_filename = generate_basel_dat_filename(pat_number)
+        analyze_and_save_dat_fixed_point(B_dat, os.path.join("dat_file/basel", basel_filename))
+    except Exception as e:
+        print(f"Failed to analyze/save Base Layer: {e}")
+
 
     # 4. 分解為細節層 D
     D = I - B
@@ -374,14 +516,14 @@ def read_hdr_image(file_path):
     
     # --- 影像裁剪 ---
     
-    TARGET_HEIGHT = 874  # 目標高度 (H)
-    TARGET_WIDTH = 644   # 目標寬度 (W)
+    TARGET_HEIGHT = 720  # 目標高度 (H)
+    TARGET_WIDTH = 1280   # 目標寬度 (W)
     
     # 檢查原始影像是否足夠大
     original_height = hdr_rgb_linear.shape[0]
     original_width = hdr_rgb_linear.shape[1]
     
-    if original_height < TARGET_HEIGHT or original_width < TARGET_WIDTH:
+    if original_height <= TARGET_HEIGHT or original_width <= TARGET_WIDTH:
         print(f"警告: 原始影像大小 {original_width}x{original_height} 小於目標裁剪尺寸 {TARGET_WIDTH}x{TARGET_HEIGHT}。")
         print("將返回原始影像。")
         return hdr_rgb_linear
@@ -437,28 +579,6 @@ def read_hdr_rgbe(path):
     E = img[..., 3].astype(np.uint8)
     return img,W,H,R_m,G_m,B_m,E
 
-# REC709_R_INT = 54   # 近似 0.2126 * 256
-# REC709_G_INT = 183  # 近似 0.7152 * 256
-# REC709_B_INT = 18   # 近似 0.0722 * 256
-
-# def rgbe_to_fixed_point_12bit_optimized(rgbe_matrix):
-    
-#     R_m = rgbe_matrix[..., 0].astype(np.uint16)
-#     G_m = rgbe_matrix[..., 1].astype(np.uint16)
-#     B_m = rgbe_matrix[..., 2].astype(np.uint16)
-
-#     # 指數保持 8-bit 進行位元操作
-#     E = rgbe_matrix[..., 3].astype(np.uint8)
-
-#     # Lm_scaled = R_m*54 + G_m*183 + B_m*18
-#     Lm_32bit = (REC709_R_INT * R_m) + (REC709_G_INT * G_m) + (REC709_B_INT * B_m)
-#     Lm_8bit_mantissa = Lm_32bit / 512.0
-#     E_4bits = ((E >> 4)).astype(np.uint16)
-#     Lm_packed = Lm_8bit_mantissa.astype(np.uint16) << 4 
-#     final_12bit_fixed = Lm_packed | E_4bits
-    
-#     return final_12bit_fixed, R_m, G_m, B_m, E
-
 def log_lookup(value, lut_array):
     fixed_index = np.clip(value, 0, lut_array.shape[0] - 1)
     I_matrix = lut_array[fixed_index]
@@ -473,16 +593,26 @@ def save_ldr_file(image_data, output_path):
         print(f"檔案儲存失敗: {output_path}")
 
 if __name__ == '__main__':
-    HDR_FILE_PATH = "img/test_pattern.hdr" 
-    LDR_OUTPUT_PATH = "img/test_pattern.png"
-    LDR_OUTPUT_PATH1 = "img/test_pattern_s.png" 
+    # I/O file name
+    pat_number = 0
+    HDR_FILE_NAME = generate_hdr_filename(pat_number)
+    HDR_FILE_PATH = os.path.join("hdr_pat", HDR_FILE_NAME)
+    LDR_FILE_NAME = generate_png_filename(pat_number)
+    LDR_OUTPUT_PATH  = os.path.join("output_img", LDR_FILE_NAME)
+    LDRS_FILE_NAME = generate_spng_filename(pat_number)
+    LDRS_OUTPUT_PATH = os.path.join("output_img", LDRS_FILE_NAME)
     
-    Luminance_FILE_PATH = "data/luminance.txt"
-    Bmatrix_FILE_PATH = "data/B_matrix.txt"
+    # Act file
+    Luminance_FILE_PATH = "act_data/luminance.txt"
+    Bmatrix_FILE_PATH   = "act_data/B_matrix.txt"
 
-    LUT_PATH = "LUT/LUT.xlsx"
-    LUT_EXCEL_PATH = "LUT/log_calculation_int_2.xlsx" 
-    Lm_LUT = "LUT/Lm_base_LUT.xlsx"
+    # Lut file
+    LUT_PATH = "lut/LUT.xlsx"
+    Lm_LUT = "lut/Lm_base_LUT.xlsx"
+
+    # input dat file
+    input_dat_file = generate_input_dat_filename(pat_number)
+    INPUT_DAT_PATH = os.path.join("dat_file/input", input_dat_file)
 
     try:
         divide_lut = load_and_prepare_lut(LUT_PATH, 'divide6Q6', 4096)
@@ -494,18 +624,20 @@ if __name__ == '__main__':
         if lut_x_l is None:
             raise ValueError("LUT 載入失敗，程式終止。")
 
-        hdr_input = read_hdr_image(HDR_FILE_PATH)
+        # hdr_input = read_hdr_image(HDR_FILE_PATH)
         rgbe_matrix, W, H, R_m, G_m, B_m, E = read_hdr_rgbe(HDR_FILE_PATH)
+        write_dat_4bytes(rgbe_matrix, INPUT_DAT_PATH)
+
         # Software Path
         final_ldr_8bit_bgr1 = local_tone_mapping_opencv(R_m, G_m, B_m, E,
                                                         lut_data_l=(lut_x_l, lut_y_l)
                                                         )
-        save_ldr_file(final_ldr_8bit_bgr1, LDR_OUTPUT_PATH1)
+        save_ldr_file(final_ldr_8bit_bgr1, LDRS_OUTPUT_PATH)
         # Hardware Path
         final_ldr_8bit_bgr = local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R_m, G_m, B_m, E,
-                                                   lut_data_l=(lut_x_l, lut_y_l))
+                                                   lut_data_l=(lut_x_l, lut_y_l), pat_number=pat_number)
         save_ldr_file(final_ldr_8bit_bgr, LDR_OUTPUT_PATH)
-        os.remove(Bmatrix_FILE_PATH)  # 圖像處理完成後自動刪除 B_matrix 檔案
+        # os.remove(Bmatrix_FILE_PATH)  # 圖像處理完成後自動刪除 B_matrix 檔案
         
     except FileNotFoundError as e:
         print(f"錯誤: {e}\n請確認檔案路徑是否正確。")

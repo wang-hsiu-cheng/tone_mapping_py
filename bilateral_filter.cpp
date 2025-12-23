@@ -320,10 +320,10 @@ void write_matrix_to_text(const Eigen::MatrixXf& matrix, const std::string& file
 }
 
 int main() {
-    const std::string EXP_LUT_FILE = "LUT/My_range_exp_LUT.txt";
-    const std::string DIVIDE_LUT_FILE = "LUT/total_weight_div.txt";
-    const std::string I_FILE = "data/luminance.txt";
-    const std::string OUTPUT_FILE_NAME = "data/B_matrix.txt";
+    const std::string EXP_LUT_FILE = "lut/My_range_exp_LUT.txt";
+    const std::string DIVIDE_LUT_FILE = "lut/total_weight_div.txt";
+    const std::string I_FILE = "act_data/luminance.txt";
+    const std::string OUTPUT_FILE_NAME = "act_data/B_matrix.txt";
     try {
         // 2. 讀取三個通道的數據
         Eigen::MatrixXf I_matrix = read_matrix_from_text(I_FILE);
