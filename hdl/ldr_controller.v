@@ -13,8 +13,7 @@ module ldr_controller (
     output reg [19:0] sram_addr_b,
     input wire signed [20:0] sram_rdata_b, 
 
-    // [MODIFIED] SRAM_IN Interface (Read Original RGBE)
-    // Python code uses "E" for shift calc. Assuming RGBE format (32-bit).
+    // SRAM_IN Interface (Read Original RGBE)
     output reg [19:0] sram_addr_in,
     input wire [31:0] sram_rdata_in, // [31:24]=R, [23:16]=G, [15:8]=B, [7:0]=E
 
@@ -32,7 +31,7 @@ module ldr_controller (
     localparam S_LATCH_K     = 3'd2;
     localparam S_PROCESS     = 3'd3; 
     localparam S_DONE        = 3'd4;
-    
+
     // Q2.15 (108853)
     localparam signed [17:0] LOG_2_10_FIXED = 18'd108853; 
 
@@ -53,15 +52,11 @@ module ldr_controller (
     assign b_range_wire = max_B_reg - min_B_reg; // Q7.14
 
     // Python: divide_lut_index = np.floor(B_range / 2**8)
-    // Q7.14 >> 8 = Q7.6. The integer part is used as index.
-    // We assume the LUT takes the relevant bits.
-    // If LUT size is small (e.g. 256), we map accordingly.
-    // b_range_wire >>> 8 gives us the scaled value.
     wire [11:0] k_lut_addr_wire;
-    assign k_lut_addr_wire = b_range_wire[19:8]; // Simple truncation for index
+    assign k_lut_addr_wire = b_range_wire[19:8]; 
 
-    wire signed [18-1:0] k_lut_data; // Q6.12 output from ROM
-    reg signed [19-1:0] k_val_reg, k_val_next; // Store as Q7.12 (because of * 2)
+    wire signed [18-1:0] k_lut_data; // Q6.12
+    reg signed [19-1:0] k_val_reg, k_val_next; // Q7.12 (stored)
 
     k_divide_lut u_k_divide_lut (
         .addr(k_lut_addr_wire), 
@@ -110,7 +105,7 @@ module ldr_controller (
     reg signed [20:0] comb_B_comp;   // Q13.14 (Shifted >> 12)
 
     // 2. Reconstruction
-    reg signed [20:0] comb_I_prime;  // Q13.14 + Q7.14 = Q13.14
+    reg signed [20:0] comb_I_prime;  // Q13.14
     reg signed [20:0] comb_I_ratio;  // Q13.14
 
     // 3. Log Domain Conversion
@@ -118,18 +113,23 @@ module ldr_controller (
     reg signed [23:0] comb_temp_log2;     // Q9.14 (Result of >> 15)
     
     reg signed [9:0]  comb_I_int;         // Integer part
-    reg [13:0]        comb_I_frac;        // Fractional part (14 bits)
+    reg [13:0]        comb_I_frac;        // Fractional part
     
     // 4. Ratio & Shift
-    reg signed [13-1:0] comb_ratio;         // Q1.12 (from LUT)
-    reg signed [7:0]  e_val;              // Unsigned 8-bit, treated as pos integer
+    reg signed [13-1:0] comb_ratio;       // Q1.12
+    reg signed [7:0]  e_val;              // Unsigned 8-bit treated as signed for math
     reg signed [9:0]  total_shift;        // Signed integer
     
     // 5. RGB Application
     reg [7:0] r_in, g_in, b_in;
-    reg signed [21:0] r_temp, g_temp, b_temp; // 8-bit * Q1.12 -> ~20 bits
+    reg [21:0] r_temp, g_temp, b_temp; 
     
-    reg signed [31:0] r_shifted, g_shifted, b_shifted; // Buffer for shift result
+    // [MODIFIED] Increased width to 48 bits to prevent overflow during left shift
+    // Python behavior implies infinite precision before clipping.
+    // Max value est: 255 * 4096 (ratio) * 2^20 (shift) ~ 10^12. 
+    // 48 bits covers up to ~2.8 * 10^14.
+    reg [47:0] r_shifted, g_shifted, b_shifted; 
+    
     reg [7:0] r_final, g_final, b_final;
 
     always @(*) begin
@@ -195,9 +195,7 @@ module ldr_controller (
 
             S_LATCH_K: begin
                 // Python: k = divide_lut[...] * 2
-                // We read k_lut_data and shift left by 1
-                // Assuming k_lut_data is Q6.12, result is Q7.12
-                k_val_next = {k_lut_data, 1'b0}; 
+                k_val_next = {k_lut_data, 1'b0};
                 state_next = S_PROCESS;
                 cnt_next   = 0;
             end
@@ -227,47 +225,31 @@ module ldr_controller (
 
                     // --- Step 5: Base Compression ---
                     // B_compressed = BB * k
-                    // BB(Q7.14) * k(Q7.12) = Q14.26
                     comb_B_mult = sram_rdata_b * k_val_reg;
-                    
-                    // Python: np.floor(B_compressed / 2**12).astype(int32) -> Q13.14
-                    // Q14.26 >>> 12 = Q14.14. 
-                    // We assign to 21-bit Q13.14 (assuming range fits)
-                    comb_B_comp = comb_B_mult[32:12]; 
+                    comb_B_comp = comb_B_mult[32:12]; // Matches Python floor( / 2**12)
 
                     // --- Step 6: Reconstruction ---
-                    // I_prime = B_compressed + D
                     comb_I_prime = comb_B_comp + comb_D;
-
-                    // I_ratio = I_prime - I
                     comb_I_ratio = comb_I_prime - sram_rdata_l;
 
                     // --- Log Domain Calculation ---
                     // Python: temp_log2 = trunc(I_ratio * LOG_2_10_FIXED / 2**15)
-                    // I_ratio(Q13.14) * LOG(Q2.15) = Q15.29
                     comb_temp_log2_raw = comb_I_ratio * LOG_2_10_FIXED;
-                    
-                    // Divide by 2^15 -> Shift right 15 -> Q15.14
-                    // We keep meaningful bits. Python casts to int32.
-                    comb_temp_log2 = comb_temp_log2_raw[38:15]; // Q9.14 (roughly)
+                    comb_temp_log2 = comb_temp_log2_raw[38:15]; // Q9.14
 
                     // Python: I_int = floor(temp_log2 / 2**14)
-                    // Extract integer part (top bits)
                     comb_I_int = comb_temp_log2[23:14];
 
                     // Python: I_frac = temp_log2 - (I_int * 2**14)
-                    // Extract fractional part (bottom 14 bits)
                     comb_I_frac = comb_temp_log2[13:0];
 
                     // --- LUT Lookup ---
                     // Python: power_lut_index = floor(I_frac / 2**2)
-                    // Take top 12 bits of the 14-bit fraction
                     power_lut_addr = comb_I_frac[13:2];
                     comb_ratio = power_lut_data; // Q1.12
 
                     // --- Shift Calculation ---
                     // Python: total_shift = E - 140 + I_int
-                    // Extract E from sram_rdata_in [31:24]
                     e_val = sram_rdata_in[7:0];
                     total_shift = $signed({1'b0, e_val}) - 10'd140 + comb_I_int;
 
@@ -276,71 +258,38 @@ module ldr_controller (
                     g_in = sram_rdata_in[23:16];
                     b_in = sram_rdata_in[15:8];
 
-                    // Python: R_temp = R * ratio
-                    // 8-bit * Q1.12 = Q9.12
-                    r_temp = $signed({1'b0, r_in}) * comb_ratio;
-                    g_temp = $signed({1'b0, g_in}) * comb_ratio;
-                    b_temp = $signed({1'b0, b_in}) * comb_ratio;
+                    // R_temp is roughly Q9.12
+                    r_temp = r_in * $unsigned(comb_ratio);
+                    g_temp = g_in * $unsigned(comb_ratio);
+                    b_temp = b_in * $unsigned(comb_ratio);
 
-                    // --- Dynamic Shift ---
-                    // Python: 
-                    // if total_shift >= 0: temp << abs(shift)
-                    // else:                temp >> abs(shift)
-                    
+                    // --- Dynamic Shift (Barrel Shifter) ---
                     if (total_shift >= 0) begin
-                        // Left shift
+                        // Left shift (Logical shift fills with 0s)
                         r_shifted = r_temp << total_shift;
                         g_shifted = g_temp << total_shift;
                         b_shifted = b_temp << total_shift;
                     end else begin
-                        // Right shift (using negate for abs)
-                        r_shifted = r_temp >> (-total_shift);
+                        // Right shift (Logical shift >> fills with 0s)
+                        // Note: -total_shift converts the negative signed value to positive magnitude
+                        r_shifted = r_temp >> (-total_shift); 
                         g_shifted = g_temp >> (-total_shift);
                         b_shifted = b_temp >> (-total_shift);
                     end
-
-                    // --- Final Clip & Output ---
-                    // Python: np.clip(..., 0, 255)
-                    // Since r_temp is Q?.12, r_shifted is also Q?.12 format logically?
-                    // No, wait. Python "ratio" is from power_lut. 
-                    // In Python code: R_temp = R * ratio. 
-                    // Then R_final_int = R_temp << shift.
-                    // The "ratio" in Python is floating point result of LUT? 
-                    // Python comment: "input Q6.6 output Q6.12" for divide_lut.
-                    // power_lut isn't fully spec'd in comments but implied normalized.
-                    // Assuming r_shifted result needs to be integer for output.
-                    // Since r_temp has 12 fractional bits (from comb_ratio Q1.12),
-                    // We need to shift right by 12 to get back to integer before clipping?
-                    // Python code does NOT show a division by 4096 (2^12) at the end.
-                    // BUT, verify: ratio = power_lut[...]. 
-                    // Usually power_lut stores 2^(fraction). Range [1.0, 2.0).
-                    // If we assume the result should be integer, we must remove the fractional part of Q1.12.
-                    // Let's assume we need to drop the 12 fraction bits of 'ratio' eventually.
-                    // Let's look at Python: R_temp is float/double implicitly unless cast?
-                    // "R_temp = R.astype(int64) * ratio". If ratio is from LUT (int), it's int.
-                    // If ratio is Q1.12 integer, then R_temp is Q9.12.
-                    // Then we shift. The final result R_out is uint8.
-                    // This implies we need to shift right by 12 somewhere to remove the Q factor of ratio.
-                    // Python code doesn't explicitly divide by 4096. 
-                    // *Likely explanation*: The `total_shift` accounts for the Q-format adjustment 
-                    // OR the user omitted the normalization in Python snippet.
-                    // *Standard Practice*: If ratio is Q12, we must >> 12.
-                    // Let's assume we need to take `r_shifted[Max:12]` as the integer.
                     
-                    // Implement safe clipping on the Integer part
-                    // Integer part is r_shifted >> 12
+                    // --- Clipping / Saturation ---
+                    // Python: np.clip(R_final_int, 0, 255)
+                    // In hardware Q1.12 domain, "255" corresponds to (255 << 12).
+                    // We check if (shifted >> 12) > 255.
                     
-                    if ((r_shifted >> 12) > 255) r_final = 255; 
-                    else if ((r_shifted >> 12) < 0) r_final = 0;
-                    else r_final = r_shifted[19:12]; // Extract bits 12-19
+                    if (r_shifted[47:8] != 0) r_final = 255;
+                    else r_final = r_shifted[8-1:0]; // Extract the integer part (Q12 formatted)
 
-                    if ((g_shifted >> 12) > 255) g_final = 255; 
-                    else if ((g_shifted >> 12) < 0) g_final = 0;
-                    else g_final = g_shifted[19:12];
+                    if (g_shifted[47:8] != 0) g_final = 255;
+                    else g_final = g_shifted[8-1:0];
 
-                    if ((b_shifted >> 12) > 255) b_final = 255; 
-                    else if ((b_shifted >> 12) < 0) b_final = 0;
-                    else b_final = b_shifted[19:12];
+                    if (b_shifted[47:8] != 0) b_final = 255; 
+                    else b_final = b_shifted[8-1:0];
 
                     // Write Output
                     sram_wdata_out = {r_final, g_final, b_final};
