@@ -426,7 +426,7 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     I_safe = I
     I_ratio = I_prime - I_safe # 除法
     print(f"I_ratio range from {I_ratio.min()} to {I_ratio.max()}")
-    temp_log2 = np.trunc(I_ratio*LOG_2_10_FIXED / 2**(15)).astype(np.int32)
+    temp_log2 = np.floor(I_ratio*LOG_2_10_FIXED / 2**(15)).astype(np.int32)
     print(f"temp_log2 range from {temp_log2.min()} to {temp_log2.max()}")
     I_int = np.floor(temp_log2 / 2**(14)).astype(np.int32)
     print(f"I_int range from {I_int.min()} to {I_int.max()}")
@@ -446,6 +446,7 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     R_temp = R.astype(np.int64) * ratio
     G_temp = G.astype(np.int64) * ratio
     B_temp = B.astype(np.int64) * ratio
+    print(f"R_temp range from {R_temp.min()} to {R_temp.max()}")
 
     # 模擬桶形移位器 (Barrel Shifter)
     # 當 total_shift 為負時 (如 -23)，執行右移 23 位
