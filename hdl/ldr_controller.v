@@ -16,7 +16,7 @@ module ldr_controller (
     // [MODIFIED] SRAM_IN Interface (Read Original RGBE)
     // Python code uses "E" for shift calc. Assuming RGBE format (32-bit).
     output reg [19:0] sram_addr_in,
-    input wire [31:0] sram_rdata_in, // [31:24]=E, [23:16]=R, [15:8]=G, [7:0]=B
+    input wire [31:0] sram_rdata_in, // [31:24]=R, [23:16]=G, [15:8]=B, [7:0]=E
 
     // SRAM_OUT Interface (Write Final RGB)
     output reg [19:0] sram_addr_out,
@@ -121,7 +121,7 @@ module ldr_controller (
     reg [13:0]        comb_I_frac;        // Fractional part (14 bits)
     
     // 4. Ratio & Shift
-    reg signed [13:0] comb_ratio;         // Q1.12 (from LUT)
+    reg signed [13-1:0] comb_ratio;         // Q1.12 (from LUT)
     reg signed [7:0]  e_val;              // Unsigned 8-bit, treated as pos integer
     reg signed [9:0]  total_shift;        // Signed integer
     
@@ -268,13 +268,13 @@ module ldr_controller (
                     // --- Shift Calculation ---
                     // Python: total_shift = E - 140 + I_int
                     // Extract E from sram_rdata_in [31:24]
-                    e_val = sram_rdata_in[31:24];
+                    e_val = sram_rdata_in[7:0];
                     total_shift = $signed({1'b0, e_val}) - 10'd140 + comb_I_int;
 
                     // --- Apply to RGB ---
-                    r_in = sram_rdata_in[23:16];
-                    g_in = sram_rdata_in[15:8];
-                    b_in = sram_rdata_in[7:0];
+                    r_in = sram_rdata_in[31:24];
+                    g_in = sram_rdata_in[23:16];
+                    b_in = sram_rdata_in[15:8];
 
                     // Python: R_temp = R * ratio
                     // 8-bit * Q1.12 = Q9.12
@@ -289,14 +289,14 @@ module ldr_controller (
                     
                     if (total_shift >= 0) begin
                         // Left shift
-                        r_shifted = r_temp <<< total_shift;
-                        g_shifted = g_temp <<< total_shift;
-                        b_shifted = b_temp <<< total_shift;
+                        r_shifted = r_temp << total_shift;
+                        g_shifted = g_temp << total_shift;
+                        b_shifted = b_temp << total_shift;
                     end else begin
                         // Right shift (using negate for abs)
-                        r_shifted = r_temp >>> (-total_shift);
-                        g_shifted = g_temp >>> (-total_shift);
-                        b_shifted = b_temp >>> (-total_shift);
+                        r_shifted = r_temp >> (-total_shift);
+                        g_shifted = g_temp >> (-total_shift);
+                        b_shifted = b_temp >> (-total_shift);
                     end
 
                     // --- Final Clip & Output ---
@@ -330,16 +330,16 @@ module ldr_controller (
                     // Implement safe clipping on the Integer part
                     // Integer part is r_shifted >> 12
                     
-                    if ((r_shifted >>> 12) > 255) r_final = 255; 
-                    else if ((r_shifted >>> 12) < 0) r_final = 0;
+                    if ((r_shifted >> 12) > 255) r_final = 255; 
+                    else if ((r_shifted >> 12) < 0) r_final = 0;
                     else r_final = r_shifted[19:12]; // Extract bits 12-19
 
-                    if ((g_shifted >>> 12) > 255) g_final = 255; 
-                    else if ((g_shifted >>> 12) < 0) g_final = 0;
+                    if ((g_shifted >> 12) > 255) g_final = 255; 
+                    else if ((g_shifted >> 12) < 0) g_final = 0;
                     else g_final = g_shifted[19:12];
 
-                    if ((b_shifted >>> 12) > 255) b_final = 255; 
-                    else if ((b_shifted >>> 12) < 0) b_final = 0;
+                    if ((b_shifted >> 12) > 255) b_final = 255; 
+                    else if ((b_shifted >> 12) < 0) b_final = 0;
                     else b_final = b_shifted[19:12];
 
                     // Write Output

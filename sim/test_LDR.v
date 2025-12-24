@@ -270,7 +270,7 @@ module test_ltm_top;
 
             // Load Input SRAM
             for(i=0; i<HEIGHT*WIDTH; i=i+1) begin
-                sram_input_u.load_act(i, input_sram_value[i]);
+                sram_input_u.load_act(i, input_sram_value[i][CH_NUM*BW_PER_CH-1:0]);
             end
         end
     endtask
