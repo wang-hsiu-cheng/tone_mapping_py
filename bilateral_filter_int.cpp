@@ -57,11 +57,17 @@ Eigen::Matrix<long long, Eigen::Dynamic, Eigen::Dynamic> custom_bilateral_filter
     Eigen::Matrix<long long, Eigen::Dynamic, Eigen::Dynamic> B_out(h, w);
 
     int spatial_kernel[5][5] = {0};
-    int dist_weights[6] = {1024, 820, 421, 0, 29, 4}; 
+    int dist_weights[9] = {1024, 820, 675, 0, 421, 337, 0, 0, 173}; 
+
     for (int i = -r; i <= r; ++i) {
         for (int j = -r; j <= r; ++j) {
-            int d2 = i * i + j * j;
-            spatial_kernel[i + r][j + r] = (d2 <= 5) ? dist_weights[d2] : 0;
+            int dist_sq = i * i + j * j;
+            if (dist_sq == 0) spatial_kernel[i + r][j + r] = 1024;
+            else if (dist_sq == 1) spatial_kernel[i + r][j + r] = 820;
+            else if (dist_sq == 2) spatial_kernel[i + r][j + r] = 421;
+            else if (dist_sq == 4) spatial_kernel[i + r][j + r] = 29;
+            else if (dist_sq == 5) spatial_kernel[i + r][j + r] = 4;
+            else spatial_kernel[i + r][j + r] = 0;
         }
     }
 
@@ -87,12 +93,22 @@ Eigen::Matrix<long long, Eigen::Dynamic, Eigen::Dynamic> custom_bilateral_filter
 
                     // Stage 2: Diff Square
                     long long diff_sq = diff_abs * diff_abs; 
-                    long long range_idx = (diff_sq >> 17) & 0x3FFF; 
+                    long long range_idx = (diff_sq >> 17);
+                    if (range_idx > 16383) range_idx =  16383;
+                    else range_idx =  range_idx & 0x3FFF;
+                    // if (i==355 && j==765) {
+                    //     std::cout << I_p << " " << I_q << "\n";
+                    //     std::cout << m << " " << n << ": " << range_idx << "\n";
+                    // }
 
                     // Stage 3: Weights
                     long long range_w = (long long)exp_lut[range_idx]; 
                     long long spatial_w = (long long)spatial_kernel[m + r][n + r]; 
                     long long total_w = (range_w * spatial_w) >> 10; 
+                    // if (i==355 && j==765) {
+                    //     std::cout << I_p << " " << I_q << "\n";
+                    //     std::cout << m << " " << n << ": " << diff_sq << " " << range_idx << " " << range_w << " " << spatial_w << " " << total_w << "\n";
+                    // }
 
                     // Stage 4: Weighted Q
                     long long weighted_q = I_q * total_w; 

@@ -281,10 +281,6 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     # --- 1. 計算亮度 (Luminance) ---
     # 硬體公式: Sum = 256 權重 + 128 Bias (依據你的code)
     Lm = 54 * R + 183 * G + 19 * B
-    
-    # 計算真實浮點數亮度 (用於後續還原)
-    E_float = E.astype(np.float32)
-    L = Lm * np.exp2(E_float - 144)
 
     # --- 2. 硬體 Log10 模擬 (關鍵修正區) ---
     lut_x_l, lut_y_l = lut_data_l
@@ -319,7 +315,7 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     
     try:
         lglum_filename = generate_lgnum_dat_filename(pat_number)
-        analyze_and_save_dat_fixed_point(I, os.path.join("dat_file/lglum", lglum_filename))
+        analyze_and_save_dat_fixed_point(I, os.path.join("./dat_file/lglum", lglum_filename))
     except Exception as e:
         print(f"Failed to analyze/save I: {e}")
 
@@ -380,39 +376,51 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     B_range.astype(np.int64)
     print(B_range, B_range / 2**8, np.floor(B_range / 2**8))
     divide_lut_index = np.floor(B_range / 2**8).astype(np.int32)
+    print(f"divide_lut_index range from {divide_lut_index.min()} to {divide_lut_index.max()}") # range: Q6.6
     k = divide_lut[divide_lut_index] * 2 # input Q6.6 output Q6.12, contrast = 100
     # k = 1 / (B_range + EPSILON) if B_range >= EPSILON else 0.0 # 因為 contrast = 10 ，所以分子就是 1
     B_compressed = BB * k # 7.14 * 6.12
     B_compressed = np.floor(B_compressed / 2**12).astype(np.int32) #Q13.14
+    print(B_compressed[0][0:5])
 
     # 6. 重建與色彩還原 (Reconstruction)
     I_prime = B_compressed + D
+    print(I_prime[0][0:5])
     print(f"I_prime range from {I_prime.min()} to {I_prime.max()}")
     LOG_2_10_FIXED = 108853 # 17-bit Q2.15
 
     I_safe = I
     I_ratio = I_prime - I_safe # 除法
     print(f"I_ratio range from {I_ratio.min()} to {I_ratio.max()}")
-    temp_log2 = np.trunc(I_ratio*LOG_2_10_FIXED / 2**(15)).astype(np.int32)
+    print(I_ratio[0][0:5])
+    temp_log2 = np.floor(I_ratio*LOG_2_10_FIXED / 2**(15)).astype(np.int32)
     print(f"temp_log2 range from {temp_log2.min()} to {temp_log2.max()}")
     I_int = np.floor(temp_log2 / 2**(14)).astype(np.int32)
     print(f"I_int range from {I_int.min()} to {I_int.max()}")
+    print(I_int[0][0:5])
     I_frac = temp_log2 - (I_int.astype(np.int64) * (2**14))
     print(f"I_frac range from {I_frac.min()} to {I_frac.max()}")
+    print(I_frac[0][0:5])
     power_lut_index = np.floor(I_frac / 2**2).astype(np.int32)
     print(f"power_lut_index range from {power_lut_index.min()} to {power_lut_index.max()}")
+    print(power_lut_index[0][0:5])
     ratio = power_lut[power_lut_index] # 查表與位移
     # ratio_fix = enforce_q_precision(ratio, 12, 21) # 模擬硬體定點數輸出 // UQ
     # ratio_fix_raw = (ratio_fix * 4096).astype(np.int64)
 
     print(f"ratio range from {ratio.min()} to {ratio.max()}")
+    print(ratio[0][0:5])
     print(f"E range from {E.min()} to {E.max()}")
     total_shift = E.astype(np.int32) - 140 + I_int.astype(np.int32)
     print(f"total_shift range from {total_shift.min()} to {total_shift.max()}")
+    print(total_shift[0][0:5])
 
     R_temp = R.astype(np.int64) * ratio
     G_temp = G.astype(np.int64) * ratio
     B_temp = B.astype(np.int64) * ratio
+    print(R_temp[0][0:5])
+    print(G_temp[0][0:5])
+    print(B_temp[0][0:5])
 
     # 模擬桶形移位器 (Barrel Shifter)
     # 當 total_shift 為負時 (如 -23)，執行右移 23 位
@@ -432,6 +440,9 @@ def local_tone_mapping_lut(Luminance_FILE_PATH, Bmatrix_FILE_PATH, R, G, B, E, l
     print(f"R_final_int range from {R_final_int.min()} to {R_final_int.max()}")
     print(f"G_final_int range from {G_final_int.min()} to {G_final_int.max()}")
     print(f"B_final_int range from {B_final_int.min()} to {B_final_int.max()}")
+    print(R_final_int[0][0:5])
+    print(G_final_int[0][0:5])
+    print(B_final_int[0][0:5])
 
     print(f"R_final_int range from {np.clip(R_final_int, 0, 255).min()} to {np.clip(R_final_int, 0, 255).max()}")
     print(f"G_final_int range from {np.clip(G_final_int, 0, 255).min()} to {np.clip(G_final_int, 0, 255).max()}")
@@ -632,10 +643,6 @@ def read_hdr_rgbe(path):
     E = img[..., 3].astype(np.uint8)
     return img,W,H,R_m,G_m,B_m,E
 
-def log_lookup(value, lut_array):
-    fixed_index = np.clip(value, 0, lut_array.shape[0] - 1)
-    I_matrix = lut_array[fixed_index]
-    return I_matrix
 
 def save_ldr_file(image_data, output_path):
     """使用 OpenCV 將 8-bit 影像數據儲存為 LDR 檔案。"""
@@ -647,8 +654,9 @@ def save_ldr_file(image_data, output_path):
 
 if __name__ == '__main__':
     # I/O file name
-    pat_number = 14
+    pat_number = 1
     HDR_FILE_NAME = generate_hdr_filename(pat_number)
+    # HDR_FILE_NAME = "test_pattern.hdr"
     HDR_FILE_PATH = os.path.join("hdr_pat", HDR_FILE_NAME)
     LDR_FILE_NAME = generate_png_filename(pat_number)
     LDR_OUTPUT_PATH  = os.path.join("output_img", LDR_FILE_NAME)
@@ -668,7 +676,7 @@ if __name__ == '__main__':
     INPUT_DAT_PATH = os.path.join("dat_file/input", input_dat_file)
 
     try:
-        divide_lut = load_and_prepare_lut(LUT_PATH, 'divide6Q6', 4096)
+        divide_lut = load_and_prepare_lut(LUT_PATH, 'divide6Q6', 8192)
         divide1_lut = load_and_prepare_lut(LUT_PATH, 'divide0Q13', 8193)
         divide2_lut = load_and_prepare_lut(LUT_PATH, 'divide2_0Q13', 8193)
         power_lut = load_and_prepare_lut(LUT_PATH, 'power2', 8192)
