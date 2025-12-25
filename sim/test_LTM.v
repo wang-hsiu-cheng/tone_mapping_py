@@ -1,7 +1,7 @@
 `timescale 1ns/100ps
 
 `define PAT_L 0
-`define PAT_U 1
+`define PAT_U 0 
 `define NUM_PAT (`PAT_U-`PAT_L+1)
 
 `define PAT_NAME_LENGTH 3
@@ -11,170 +11,195 @@
 `define FLAG_DUMPWV 1
 
 module test_ltm_top;
+    // Parameters
+    parameter HEIGHT = 720;
+    parameter WIDTH = 1280;
+    parameter ADDR_WIDTH = $clog2(HEIGHT * WIDTH);
+    parameter CH_NUM = 4;     
+    parameter BW_PER_CH = 8;
+    parameter DATA_WIDTH_L = 21;
+    
+    // States
+    localparam LOG_LUN = 2'd0, BASE_LAYER = 2'd1, LDR = 2'd2;
+    localparam L = 0, B = 1, R = 2; 
 
-// Parameters (adjust as needed)
-parameter HEIGHT = 720;
-parameter WIDTH = 1280;
-parameter ADDR_WIDTH = $clog2(HEIGHT * WIDTH);
-// For input sram data per channel = 32 bits
-parameter CH_NUM = 4;     // RGBE 4 channel
-parameter BW_PER_CH = 8;  // each channel has 8 bits
-// For sram act L & B data per channel = 21 bits (Q7.14)
-parameter DATA_WIDTH_L = 21;
+    integer test_layer;
+    reg [8*26-1:0] layer_str;
 
-
-localparam LOG_LUN = 2'd0, BASE_LAYER = 2'd1, LDR = 2'd2;
-localparam L = 0, B = 1;
-
-integer test_layer;
-reg [8*26-1:0] layer_str;
-
-
-initial begin
-    layer_str = 0;
-    `ifdef LOG_LUN
-        test_layer = LOG_LUN;
-        layer_str = "      Log Luminance     ";
-    `elsif BASE_LAYER
-        test_layer = BASE_LAYER;
-        layer_str = "      Base Layer    ";
-    `elsif LDR
-        test_layer = LDR;
-        layer_str = "   LDR OUTPUT   ";
-    `endif
-end
-
-integer i;
-// ===== pattern files ===== //
-reg [25*8-1:0] input_sram_golden_file; 
-reg [25*8-1:0] lglum_sram_golden_file;
-reg [25*8-1:0] basel_sram_golden_file; 
-
-// ===== module I/O ===== //
-reg clk;
-reg srst_n;
-reg enable;
-wire valid;
-// SRAM input connection
-wire [CH_NUM*BW_PER_CH-1:0] sram_rdata_in;
-wire [ADDR_WIDTH-1:0] sram_addr_in;
-// SRAN ACT L connection
-wire [DATA_WIDTH_L-1:0] sram_rdata_l;
-wire [DATA_WIDTH_L-1:0] sram_wdata_l;
-wire [ADDR_WIDTH-1:0] sram_addr_l;
-wire sram_wen_l;
-// SRAN ACT B connection
-wire [DATA_WIDTH_L-1:0] sram_rdata_b;
-wire [DATA_WIDTH_L-1:0] sram_wdata_b;
-wire [ADDR_WIDTH-1:0] sram_addr_b;
-wire sram_wen_b;
-
-
-// Instantiate ViT RTL module
-LTM_top #(
-.CH_NUM(CH_NUM),
-.BW_PER_CH(BW_PER_CH),
-.HEIGHT(HEIGHT),
-.WIDTH(WIDTH),
-.DATA_WIDTH_L(DATA_WIDTH_L)
-) uut (
-.clk(clk),
-.srst_n(srst_n),
-.enable(enable),
-.valid(valid),
-// sram input
-.sram_rdata_in(sram_rdata_in),
-.sram_addr_in(sram_addr_in),
-// sram act l
-.sram_rdata_l(sram_rdata_l),
-.sram_wdata_l(sram_wdata_l),
-.sram_addr_l(sram_addr_l),
-.sram_wen_l(sram_wen_l),
-// sram act l
-.sram_rdata_b(sram_rdata_b),
-.sram_wdata_b(sram_wdata_b),
-.sram_addr_b(sram_addr_b),
-.sram_wen_b(sram_wen_b)
-);
-
-// ===== sram connection ===== //
-// SRAM for INPUT
-sram_input #(
-    .CH_NUM(CH_NUM),
-    .BW_PER_CH(BW_PER_CH),
-    .HEIGHT(HEIGHT),
-    .WIDTH(WIDTH)
-) sram_input_u (
-    .clk(clk),
-    .csb(1'b0),
-    .wsb(1'b1), // no use
-    .wdata({CH_NUM*BW_PER_CH{1'b0}}), // no use
-    .waddr(sram_addr_in), 
-    .raddr(sram_addr_in), 
-    .rdata(sram_rdata_in)
-);
-// SRAM ACT L
-sram_act_l #(
-    .DATA_WIDTH(DATA_WIDTH_L),
-    .HEIGHT(HEIGHT),
-    .WIDTH(WIDTH)
-) sram_act_l_u (
-    .clk(clk),
-    .csb(1'b0),
-    .wsb(sram_wen_l),
-    .wdata(sram_wdata_l), 
-    .waddr(sram_addr_l), 
-    .raddr(sram_addr_l), 
-    .rdata(sram_rdata_l)
-);
-// SRAM ACT B
-sram_act_b #(
-    .DATA_WIDTH(DATA_WIDTH_L),
-    .HEIGHT(HEIGHT),
-    .WIDTH(WIDTH)
-) sram_act_b_u (
-    .clk(clk),
-    .csb(1'b0),
-    .wsb(sram_wen_b),
-    .wdata(sram_wdata_b), 
-    .waddr(sram_addr_b), 
-    .raddr(sram_addr_b), 
-    .rdata(sram_rdata_b)
-);
-
-// ===== waveform dumpping ===== //
-initial begin
-    if(`FLAG_DUMPWV)begin
-        $fsdbDumpfile("fp_local_tone_mapping.fsdb");
-        // $fsdbDumpvars("+mda", LTM_top);
-        $fsdbDumpvars(1, LTM_top);
-        $fsdbDumpvars(1, log_lum_controller);
+    initial begin
+        layer_str = 0;
+        `ifdef LOG_LUN
+            test_layer = LOG_LUN;
+            layer_str = "      Log Luminance     ";
+        `elsif BASE_LAYER
+            test_layer = BASE_LAYER;
+            layer_str = "      Base Layer    ";
+        `elsif LDR
+            test_layer = LDR;
+            layer_str = "   LDR OUTPUT   ";
+        `endif
     end
-end
 
-// ===== parameter & golden answers ===== //
-reg [CH_NUM*BW_PER_CH-1:0] input_sram_value [0:HEIGHT*WIDTH-1];
-reg [32-1:0] lglum_sram_value [0:HEIGHT*WIDTH-1]; // 32 bit for saving .dat but [20:0] is golden
-reg [32-1:0] basel_sram_value [0:HEIGHT*WIDTH-1]; // 32 bit for saving .dat but [20:0] is golden
+    integer i;
+    
+    reg [25*8-1:0] input_sram_golden_file;
+    reg [25*8-1:0] lglum_sram_golden_file;
+    reg [25*8-1:0] basel_sram_golden_file; 
+    reg [25*8-1:0] outpt_sram_golden_file;
 
-// ===== system reset ===== //
-initial begin
-    clk = 0;
-    while(1) #(`CYCLE/2) clk = ~clk;
-end
+    // ===== module I/O ===== //
+    reg clk;
+    reg srst_n;
+    reg enable;
+    wire valid;
 
-initial begin
-  #(`CYCLE * `END_CYCLES);
-    $display("\n========================================================");
-    $display("   Error!!! Simulation time is too long...            ");
-    $display("   There might be something wrong in your code.       ");
-    $display("   If your design really needs such a long time,      ");
-    $display("   increase the END_CYCLES setting in the testbench.  ");
-    $display("========================================================");
-    $finish;
-end
+    // SRAM Wires
+    wire [CH_NUM*BW_PER_CH-1:0] sram_rdata_in;
+    wire [ADDR_WIDTH-1:0] sram_addr_in;
+    
+    wire [DATA_WIDTH_L-1:0] sram_rdata_l;
+    wire [DATA_WIDTH_L-1:0] sram_wdata_l;
+    wire [ADDR_WIDTH-1:0] sram_addr_l;
+    wire sram_wen_l;
 
-// ===== cycle counter ===== //
+    wire [DATA_WIDTH_L-1:0] sram_rdata_b;
+    wire [DATA_WIDTH_L-1:0] sram_wdata_b;
+    wire [ADDR_WIDTH-1:0] sram_addr_b;
+    wire sram_wen_b;
+
+    // SRAM OUT Wires (Final RGB)
+    wire [23:0] sram_wdata_out;
+    wire [ADDR_WIDTH-1:0] sram_addr_out;
+    wire sram_wen_out;
+
+    // Instantiate LTM_top
+    LTM_top #(
+        .CH_NUM(CH_NUM),
+        .BW_PER_CH(BW_PER_CH),
+        .HEIGHT(HEIGHT),
+        .WIDTH(WIDTH),
+        .DATA_WIDTH_L(DATA_WIDTH_L)
+    ) uut (
+        .clk(clk),
+        .srst_n(srst_n),
+        .enable(enable),
+        .valid(valid),
+        // sram input
+        .sram_rdata_in(sram_rdata_in),
+        .sram_addr_in(sram_addr_in),
+        // sram act l
+        .sram_rdata_l(sram_rdata_l),
+        .sram_wdata_l(sram_wdata_l),
+        .sram_addr_l(sram_addr_l),
+        .sram_wen_l(sram_wen_l),
+        // sram act b
+        .sram_rdata_b(sram_rdata_b),
+        .sram_wdata_b(sram_wdata_b),
+        .sram_addr_b(sram_addr_b),
+        .sram_wen_b(sram_wen_b),
+        // sram out
+        .sram_wdata_out(sram_wdata_out),
+        .sram_addr_out(sram_addr_out),
+        .sram_wen_out(sram_wen_out)
+    );
+
+    // ===== SRAM Models ===== //
+    // SRAM INPUT
+    sram_input #(
+        .CH_NUM(CH_NUM),
+        .BW_PER_CH(BW_PER_CH),
+        .HEIGHT(HEIGHT),
+        .WIDTH(WIDTH)
+    ) sram_input_u (
+        .clk(clk),
+        .csb(1'b0),
+        .wsb(1'b1),
+        .wdata({CH_NUM*BW_PER_CH{1'b0}}),
+        .waddr(sram_addr_in), 
+        .raddr(sram_addr_in), 
+        .rdata(sram_rdata_in)
+    );
+
+    // SRAM ACT L
+    sram_act_l #(
+        .DATA_WIDTH(DATA_WIDTH_L),
+        .HEIGHT(HEIGHT),
+        .WIDTH(WIDTH)
+    ) sram_act_l_u (
+        .clk(clk),
+        .csb(1'b0),
+        .wsb(sram_wen_l),
+        .wdata(sram_wdata_l), 
+        .waddr(sram_addr_l), 
+        .raddr(sram_addr_l), 
+        .rdata(sram_rdata_l)
+    );
+
+    // SRAM ACT B
+    sram_act_b #(
+        .DATA_WIDTH(DATA_WIDTH_L),
+        .HEIGHT(HEIGHT),
+        .WIDTH(WIDTH)
+    ) sram_act_b_u (
+        .clk(clk),
+        .csb(1'b0),
+        .wsb(sram_wen_b),
+        .wdata(sram_wdata_b), 
+        .waddr(sram_addr_b), 
+        .raddr(sram_addr_b), 
+        .rdata(sram_rdata_b)
+    );
+
+    // SRAM OUTPUT (Stores RTL Result)
+    sram_output #(
+        .CH_NUM(3),        // RGB 3 channels
+        .BW_PER_CH(8),     // 8 bits per channel
+        .HEIGHT(HEIGHT),
+        .WIDTH(WIDTH)
+    ) sram_output_u (
+        .clk(clk),
+        .csb(1'b0),        
+        .wsb(sram_wen_out), // Active Low write enable
+        .wdata(sram_wdata_out),
+        .waddr(sram_addr_out),
+        .raddr(sram_addr_out), 
+        .rdata()           
+    );
+
+    // ===== Waveform ===== //
+    `define SDFFILE "../syn/netlist/LTM_top_syn.sdf"
+    `ifdef SDF
+        initial $sdf_annotate(`SDFFILE, uut);
+    `endif
+    initial begin
+        if(`FLAG_DUMPWV)begin
+            // $fsdbDumpfile("test_ltm_ldr.fsdb");
+            $fsdbDumpvars(1, LTM_top);
+            $fsdbDumpvars(1, log_lum_controller);
+            $fsdbDumpvars(1, ldr_controller);
+        end
+    end
+
+    // ===== Golden Data Storage ===== //
+    reg [31:0] input_sram_value [0:HEIGHT*WIDTH-1];
+    reg [31:0] lglum_sram_value [0:HEIGHT*WIDTH-1]; 
+    reg [31:0] basel_sram_value [0:HEIGHT*WIDTH-1];
+    reg [23:0] outpt_sram_value [0:HEIGHT*WIDTH-1];
+
+    // ===== Clock Gen ===== //
+    initial begin
+        clk = 0;
+        while(1) #(`CYCLE/2) clk = ~clk;
+    end
+
+    // ===== Timeout ===== //
+    initial begin
+        #(`CYCLE * `END_CYCLES);
+        $display("Error!!! Simulation Timeout.");
+        $finish;
+    end
+
+    // ===== cycle counter ===== //
 integer cycle_cnt;
 integer aver_cycle_cnt;
 initial begin
@@ -194,10 +219,10 @@ integer total_err_pat;
 
 initial begin
     // check if PAT_L and PAT_U are both valid
-    if((`PAT_L < 0) || (`PAT_L > `NUM_PAT-1) || (`PAT_U < 0) || (`PAT_U > `NUM_PAT-1)) begin
+    if((`PAT_L < 0) || (`PAT_L > 60-1) || (`PAT_U < 0) || (`PAT_U > 60-1)) begin
         $display("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
         $display("X                                                                             X");
-        $display("X   Error!!! PAT_L and PAT_U should be within the range [0, %3d]              X", `NUM_PAT-1);
+        $display("X   Error!!! PAT_L and PAT_U should be within the range [0, %3d]              X", 60-1);
         $display("X                                                                             X");
         $display("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
         $finish;
@@ -221,6 +246,7 @@ initial begin
         sram_input_u.reset_sram;
         sram_act_l_u.reset_sram;
         sram_act_b_u.reset_sram;
+        sram_output_u.reset_sram;
 
         error_total = 0;
 
@@ -244,6 +270,7 @@ initial begin
         case (test_layer)
             LOG_LUN:    compare_output(L);
             BASE_LAYER: compare_output(B);
+            LDR:        compare_output(R);
         endcase
     end
     
@@ -288,7 +315,8 @@ task load_golden(
         input_sram_golden_file = "param/input/input_000.dat"; // 25 char
         lglum_sram_golden_file = "param/lglum/lglum_000.dat"; // 25 char
         basel_sram_golden_file = "param/basel/basel_000.dat"; // 25 char
-        
+        outpt_sram_golden_file = "param/outpt/outpt_000.dat"; // 25 char
+
         // Change dat test number
         input_sram_golden_file[4*8+:`PAT_NAME_LENGTH*8] 
             = {index_digit_2, index_digit_1, index_digit_0};
@@ -296,13 +324,11 @@ task load_golden(
             = {index_digit_2, index_digit_1, index_digit_0};
         basel_sram_golden_file[4*8+:`PAT_NAME_LENGTH*8] 
             = {index_digit_2, index_digit_1, index_digit_0};
+        outpt_sram_golden_file[4*8+:`PAT_NAME_LENGTH*8] 
+            = {index_digit_2, index_digit_1, index_digit_0};
 
         // load input
         $readmemh(input_sram_golden_file, input_sram_value);
-
-        // load golden
-        $readmemh(lglum_sram_golden_file, lglum_sram_value);
-        $readmemh(basel_sram_golden_file, basel_sram_value);
 
         // store input data into sram
         for(i=0; i<HEIGHT*WIDTH; i=i+1) begin
@@ -311,17 +337,17 @@ task load_golden(
     end
 endtask
 
-// 1. 定義允許的誤差範圍 (例如 1 表示允許正負 1 的誤差)
-parameter TOLERANCE = 1; 
-
-integer diff;
-reg signed [20:0] hw_val, golden_val;
+reg [7:0] hw_R, hw_G, hw_B;
+reg [7:0] golden_R, golden_G, golden_B;
 
 task compare_output(input integer sram_sel);
     integer h, w;
     integer error_tmp;
     case (sram_sel)
         L: begin
+            // load golden
+            $readmemh(lglum_sram_golden_file, lglum_sram_value);
+
             for(h=0; h<HEIGHT; h=h+1) begin
                 error_tmp = 0;
                 for(w=0; w<WIDTH; w=w+1) begin
@@ -352,37 +378,62 @@ task compare_output(input integer sram_sel);
         end
 
         B: begin
+            // load golden
+            $readmemh(basel_sram_golden_file, basel_sram_value);
+            
             for(h=0; h<HEIGHT; h=h+1) begin
                 error_tmp = 0;
                 for(w=0; w<WIDTH; w=w+1) begin
-                    // 2. 將 21-bit 位元轉為有符號整數進行運算
-                    // 使用符號擴展確保減法正確
-                    golden_val     = basel_sram_value[h*WIDTH+w][20:0];
-                    hw_val         = sram_act_b_u.mem[h*WIDTH+w][20:0];
-                    
-                    // 3. 計算差值
-                    diff = hw_val - golden_val;
-            
-                    // 4. 取絕對值 (Absolute Value)
-                    if (diff < 0) diff = -diff;
-                    
-                    // 5. 判斷是否超過容許範圍
-                    // 如果其中一個是 x 或 z，diff > TOLERANCE 會判斷為不成立，
-                    // 若要嚴謹一點可以先檢查是否為未知態
-                    if (sram_act_b_u.mem[h*WIDTH+w][20:0] === 21'dX) begin
+                    if((basel_sram_value[h*WIDTH+w][20:0] !== sram_act_b_u.mem[h*WIDTH+w][20:0]))
                         error_tmp = error_tmp + 1;
-                    end else if (diff > TOLERANCE) begin
-                        error_tmp = error_tmp + 1;
-                        // (選用) 打印出錯誤的值方便 Debug
-                        if(`FLAG_VERBOSE) $display("Error at [%0d,%0d]: HW=%d, Golden=%d, Diff=%d", h, w, hw_val, golden_val, diff);
-                    end
                 end
-            
                 if (error_tmp != 0) begin
-                    if(`FLAG_VERBOSE) $display("Sram #B row %0d FAIL! (Errors: %0d)", h, error_tmp);
+                    if(`FLAG_VERBOSE) $display("Sram #B row %0d FAIL!", (h));
                     error_total = error_total + 1;
                 end else begin
                     if(`FLAG_VERBOSE) $display("Sram #B row %0d PASS!", (h));
+                end
+            end
+            // summary of this pattern
+            if(`FLAG_VERBOSE) $display("\n========================================================================");
+            if(error_total == 0) begin
+                if(`FLAG_VERBOSE) $display("Congratulations! Your %s layer is correct!", layer_str);
+                if(`FLAG_VERBOSE) $display("Pattern No. %02d is successfully passed !", pat_idx);
+                else              $write("%c[1;32mPASS! %c[0m",27, 27);
+            end else begin
+                if(`FLAG_VERBOSE) $display("There are total %0d row hase errors in your %s layer.", error_total, layer_str);
+                if(`FLAG_VERBOSE) $display("Pattern No. %02d is failed...", pat_idx);
+                else              $write("%c[1;31mFAIL! %c[0m",27, 27);
+                total_err_pat = total_err_pat + 1;
+            end
+            if(`FLAG_VERBOSE) $display("========================================================================");
+            // $finish;
+        end
+
+        R: begin
+            // load golden
+            $readmemh(outpt_sram_golden_file, outpt_sram_value);
+
+            for(h=0; h<HEIGHT; h=h+1) begin
+                error_tmp = 0;
+                for(w=0; w<WIDTH; w=w+1) begin
+                    if((outpt_sram_value[h*WIDTH+w][23:0] !== sram_output_u.mem[h*WIDTH+w][23:0])) begin
+                        error_tmp = error_tmp + 1;
+                    
+                        hw_R = sram_output_u.mem[h*WIDTH+w][23:16];
+                        hw_G = sram_output_u.mem[h*WIDTH+w][15:8];
+                        hw_B = sram_output_u.mem[h*WIDTH+w][7:0];
+                        golden_R = outpt_sram_value[h*WIDTH+w][23:16];
+                        golden_G = outpt_sram_value[h*WIDTH+w][15:8];
+                        golden_B = outpt_sram_value[h*WIDTH+w][7:0];
+                        if(`FLAG_VERBOSE) $display("Error at [%0d,%0d]: HW_R=%d, HW_G=%d, HW_B=%d, G_R=%d, G_G=%d, G_B=%d", h, w, hw_R, hw_G, hw_B, golden_R, golden_G, golden_B);
+                    end
+                end
+                if (error_tmp != 0) begin
+                    if(`FLAG_VERBOSE) $display("Sram #O row %0d FAIL!", (h));
+                    error_total = error_total + 1;
+                end else begin
+                    if(`FLAG_VERBOSE) $display("Sram #O row %0d PASS!", (h));
                 end
             end
             // summary of this pattern

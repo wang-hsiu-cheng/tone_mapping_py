@@ -1,7 +1,6 @@
 module base_layer_controller (
     // Control signals
     input wire clk,
-    input wire srst_n,
 
     // counter input
     input wire [10:0] w_counter,
@@ -15,40 +14,21 @@ module base_layer_controller (
 );
 
 // Line buffer
-reg signed [20:0] LB0 [0:1279];
-reg signed [20:0] LB1 [0:1279];
-reg signed [20:0] LB2 [0:1279];
-reg signed [20:0] LB3 [0:1279];
-reg signed [20:0] LB4 [0:4];
-integer i;
-always @(posedge clk) begin
-    // LB4
-    for (i = 0; i < 4; i = i + 1) begin
-        LB4[i] <= LB4[i+1];
-    end
-    LB4[4] <= log_lum_out;
+wire signed [20:0] LB0 [0:4];
+wire signed [20:0] LB1 [0:4];
+wire signed [20:0] LB2 [0:4];
+wire signed [20:0] LB3 [0:4];
+wire signed [20:0] LB4 [0:4];
 
-    // LB3
-    for (i = 0; i < 1279; i = i + 1) begin
-        LB3[i] <= LB3[i+1];
-    end
-    LB3[1279] <= LB4[0];
-    // LB2
-    for (i = 0; i < 1279; i = i + 1) begin
-        LB2[i] <= LB2[i+1];
-    end
-    LB2[1279] <= LB3[0];
-    // LB1
-    for (i = 0; i < 1279; i = i + 1) begin
-        LB1[i] <= LB1[i+1];
-    end
-    LB1[1279] <= LB2[0];
-    // LB0
-    for (i = 0; i < 1279; i = i + 1) begin
-        LB0[i] <= LB0[i+1];
-    end
-    LB0[1279] <= LB1[0];
-end
+line_buffer line_buffer_u (
+    .clk(clk),
+    .log_lum_out(log_lum_out),
+    .lb00(LB0[0]), .lb01(LB0[1]), .lb02(LB0[2]), .lb03(LB0[3]), .lb04(LB0[4]),
+    .lb10(LB1[0]), .lb11(LB1[1]), .lb12(LB1[2]), .lb13(LB1[3]), .lb14(LB1[4]),
+    .lb20(LB2[0]), .lb21(LB2[1]), .lb22(LB2[2]), .lb23(LB2[3]), .lb24(LB2[4]),
+    .lb30(LB3[0]), .lb31(LB3[1]), .lb32(LB3[2]), .lb33(LB3[3]), .lb34(LB3[4]),
+    .lb40(LB4[0]), .lb41(LB4[1]), .lb42(LB4[2]), .lb43(LB4[3]), .lb44(LB4[4])
+);
 
 // center position counter
 // after (row, col) = (2,2) enter line buffer, center is at (0,0)
@@ -59,16 +39,16 @@ always @(posedge clk) begin
     h_center <= h_center_next;
 end
 always @(*) begin
-    if (h_counter == 2 && w_counter == 1) begin
+    if (w_counter == 2 && h_counter == 1) begin
         h_center_next = 0;
         w_center_next = 0;
     end else begin
-        if (w_center >= 1279) begin
-            h_center_next = h_center + 1;
-            w_center_next = 0;
-        end else begin
-            h_center_next = h_center;
+        if (h_center >= 719) begin
+            h_center_next = 0;
             w_center_next = w_center + 1;
+        end else begin
+            h_center_next = h_center + 1;
+            w_center_next = w_center;
         end
     end
 end
@@ -682,15 +662,25 @@ always @(posedge clk) begin
     numerator_1_reg <= numerator_1;
 end
 
-// stage 4 multiply 
+// stage 4 multiply stage 1
 wire signed [10:0]wp_lut_signed;
 assign wp_lut_signed = {1'b0, wp_lut_reg};
-reg signed [44:0] b_val; // Q11.34
+reg signed [44:0] b_val_stage1; // Q11.34
+always @(posedge clk) begin
+    b_val_stage1 <= wp_lut_signed * numerator_1_reg;
+end
+
+// stage 5 mutiply stage 2
+reg signed [44:0] b_val_stage2; // Q11.34
+always @(posedge clk) begin
+    b_val_stage2 <= b_val_stage1;
+end
+
+// stage 6 output
 reg signed [24:0] b_quant; // Q11.14
 reg signed [20:0] b_clamp; // base_layer_out Q7.14
 always @(*) begin
-    b_val = wp_lut_signed * numerator_1_reg;
-    b_quant = b_val[44:20];
+    b_quant = b_val_stage2[44:20];
     if (b_quant > 1048575)
         b_clamp = 1048575;
     else if (b_quant < -1048576)

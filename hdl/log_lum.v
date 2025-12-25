@@ -1,6 +1,5 @@
 module log_lum (
     input wire clk,
-    // input wire srst_n,
 
     // input wire valid_in,
     input wire [7:0] R,
@@ -32,10 +31,8 @@ always @(posedge clk) begin
 end
 
 // stage 2
-reg [3:0] Msb, Msb_next;
-always @(posedge clk) begin
-    Msb <= Msb_next;
-end
+reg [3:0] Msb_next;
+
 always @(*) begin
     if (Lm[15]) begin
         Msb_next = 4'd15;
@@ -142,17 +139,5 @@ end
 always @(*) begin
     log_lum_out = {log_lum[21], log_lum[19:0]};
 end
-
-// valid shift register
-// reg [2:0] valid;
-// always @(posedge clk) begin
-//     if (~srst_n) begin
-//         valid <= 3'd0;
-//     end else begin
-//         valid[2:1] <= valid[1:0];
-//         valid[0] <= valid_in;
-//     end
-// end
-// assign valid_out = valid[2];
 
 endmodule

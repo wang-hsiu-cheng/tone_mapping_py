@@ -7172,7 +7172,7 @@ always @(*) begin
         13'd1027 : data = 10'd1021;
         13'd1026 : data = 10'd1022;
         13'd1025 : data = 10'd1023;
-        default: data = 10'd1023;
+        default: data = 10'd0;
     endcase
 end
 

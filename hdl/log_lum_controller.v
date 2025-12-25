@@ -17,16 +17,17 @@ module log_lum_controller #(
     output reg [20-1:0] sram_addr_in,
 
     // act sram L interface
-    input wire [DATA_WIDTH_L-1:0] sram_rdata_l,
     output reg [20-1:0] sram_addr_l,
     output reg sram_wen_l,
     output reg [DATA_WIDTH_L-1:0] sram_wdata_l,
 
     // act sram B interface
-    input wire [DATA_WIDTH_L-1:0] sram_rdata_b,
     output reg [20-1:0] sram_addr_b,
     output reg sram_wen_b,
-    output reg [DATA_WIDTH_L-1:0] sram_wdata_b
+    output reg [DATA_WIDTH_L-1:0] sram_wdata_b,
+
+    output reg signed [20:0] b_max,
+    output reg signed [20:0] b_min
 );
 
 // fsm 
@@ -59,30 +60,30 @@ always @(*) begin
             w_counter_next = 0;
         end
         READ: begin
-            if (w_counter >= 1279) begin
-                h_counter_next = h_counter + 1;
-                w_counter_next = 0;
-            end else begin
-                h_counter_next = h_counter;
+            if (h_counter >= 719) begin
+                h_counter_next = 0;
                 w_counter_next = w_counter + 1;
+            end else begin
+                h_counter_next = h_counter + 1;
+                w_counter_next = w_counter;
             end
         end
         PIPE: begin
-            if (w_counter >= 1279) begin
-                h_counter_next = h_counter + 1;
-                w_counter_next = 0;
-            end else begin
-                h_counter_next = h_counter;
+            if (h_counter >= 719) begin
+                h_counter_next = 0;
                 w_counter_next = w_counter + 1;
+            end else begin
+                h_counter_next = h_counter + 1;
+                w_counter_next = w_counter;
             end
         end
         BASE: begin
-            if (w_counter >= 1279) begin
-                h_counter_next = h_counter + 1;
-                w_counter_next = 0;
-            end else begin
-                h_counter_next = h_counter;
+            if (h_counter >= 719) begin
+                h_counter_next = 0;
                 w_counter_next = w_counter + 1;
+            end else begin
+                h_counter_next = h_counter + 1;
+                w_counter_next = w_counter;
             end
         end
         default: begin
@@ -148,21 +149,21 @@ always @(*) begin
             w_out_next = 0;
         end
         PIPE: begin
-            if (w_out >= 1279) begin
-                h_out_next = h_out + 1;
-                w_out_next = 0;
-            end else begin
-                h_out_next = h_out;
+            if (h_out >= 719) begin
+                h_out_next = 0;
                 w_out_next = w_out + 1;
+            end else begin
+                h_out_next = h_out + 1;
+                w_out_next = w_out;
             end
         end
         BASE: begin
-            if (w_out >= 1279) begin
-                h_out_next = h_out + 1;
-                w_out_next = 0;
-            end else begin
-                h_out_next = h_out;
+            if (h_out >= 719) begin
+                h_out_next = 0;
                 w_out_next = w_out + 1;
+            end else begin
+                h_out_next = h_out + 1;
+                w_out_next = w_out;
             end
         end
         default: begin
@@ -181,7 +182,7 @@ always @(posedge clk) begin
         if (next_state == PIPE) begin
             sram_wen_l <= 0;
             sram_wdata_l <= log_lum_out;
-        end else if (next_state == BASE && h_out_next <= 1279) begin
+        end else if (next_state == BASE && w_out_next <= 1279) begin
             sram_wen_l <= 0;
             sram_wdata_l <= log_lum_out;
         end else begin
@@ -195,7 +196,6 @@ end
 wire signed [20:0] base_layer_out;
 base_layer_controller u_base_layer_controller (
     .clk(clk),
-    .srst_n(srst_n),
     // counter input
     .w_counter(w_out),
     .h_counter(h_out),
@@ -227,12 +227,12 @@ always @(*) begin
             w_base_out_next = 0;
         end
         BASE: begin
-            if (w_base_out >= 1279) begin
-                h_base_out_next = h_base_out + 1;
-                w_base_out_next = 0;
-            end else begin
-                h_base_out_next = h_base_out;
+            if (h_base_out >= 719) begin
+                h_base_out_next = 0;
                 w_base_out_next = w_base_out + 1;
+            end else begin
+                h_base_out_next = h_base_out + 1;
+                w_base_out_next = w_base_out;
             end
         end
         default: begin
@@ -257,7 +257,26 @@ always @(posedge clk) begin
         end
     end
 end
-
+always @(posedge clk) begin
+    if (next_state == READ) begin
+        b_max <= 21'sh100000;
+        b_min <= 21'sh0FFFFF;
+    end else if (next_state == BASE) begin
+        if (base_layer_out > b_max) begin
+            b_max <= base_layer_out;
+        end else begin
+            b_max <= b_max;
+        end
+        if (base_layer_out < b_min) begin
+            b_min <= base_layer_out;
+        end else begin
+            b_min <= b_min;
+        end
+    end else begin
+        b_max <= b_max;
+        b_min <= b_min;
+    end
+end
 
 // state transition logic
 always @(*) begin
@@ -267,15 +286,15 @@ always @(*) begin
             else next_state = state;
         end
         READ: begin
-            if (w_counter >= 4) next_state = PIPE;
+            if (h_counter >= 4) next_state = PIPE;
             else next_state = state;
         end
         PIPE: begin
-            if (h_counter >= 2 && w_counter >= 15) next_state = BASE;
+            if (w_counter >= 2 && h_counter >= 17) next_state = BASE;
             else next_state = state;
         end
         BASE: begin
-            if (h_base_out >= 719 && w_base_out >= 1279 ) next_state = DONE;
+            if (w_base_out >= 1279 && h_base_out >= 719 ) next_state = DONE;
             else next_state = state;
         end
         DONE: begin
