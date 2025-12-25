@@ -102,11 +102,11 @@ module ldr_controller (
     // 1. Base Layer Compression
     reg signed [20:0] comb_D;        // Q7.14
     reg signed [34:0] comb_B_mult;   // Q7.14 * Q7.12 = Q14.26
-    reg signed [20:0] comb_B_comp;   // Q13.14 (Shifted >> 12)
+    reg signed [20:0] comb_B_comp;   // Q7.14 (Shifted >> 12)
 
     // 2. Reconstruction
-    reg signed [20:0] comb_I_prime;  // Q13.14
-    reg signed [20:0] comb_I_ratio;  // Q13.14
+    reg signed [20:0] comb_I_prime;  // Q7.14
+    reg signed [20:0] comb_I_ratio;  // Q7.14
 
     // 3. Log Domain Conversion
     reg signed [38:0] comb_temp_log2_raw; // Q13.14 * Q2.15 = Q15.29
